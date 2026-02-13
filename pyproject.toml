@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hdrive-etc"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python SDK for Henschel Robotics HDrive servo motors over EtherCAT"
 readme = "README.md"
 license = {text = "MIT"}
