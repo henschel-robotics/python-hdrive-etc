@@ -209,6 +209,11 @@ See the [`examples/`](examples/) folder:
 
 MIT — see [LICENSE](LICENSE) for details.
 
+**Third-party notice:** This package depends on [PySOEM](https://github.com/bnjmnp/pysoem) (MIT),
+which wraps [SOEM](https://github.com/OpenEtherCATsociety/SOEM) (GPLv3 / Commercial).
+Users are responsible for complying with SOEM's license terms.
+For commercial use of SOEM, contact [RT-Labs](https://rt-labs.com) (sales@rt-labs.com).
+
 ## Support
 
 - **Email:** info@henschel-robotics.ch
