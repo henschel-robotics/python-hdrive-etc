@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hdrive-etc"
+version = "0.1.0"
+description = "Python SDK for Henschel Robotics HDrive servo motors over EtherCAT"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Henschel Robotics GmbH", email = "info@henschel-robotics.ch"},
+]
+keywords = ["servo", "motor", "hdrive", "ethercat", "motion-control", "robotics", "pysoem"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+dependencies = [
+    "pysoem>=1.1.0",
+]
+
+[project.urls]
+Homepage = "https://henschel-robotics.ch"
+Documentation = "https://henschel-robotics.ch"
+Repository = "https://github.com/henschel-robotics/python-hdrive-etc"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["hdrive_etc*"]
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
