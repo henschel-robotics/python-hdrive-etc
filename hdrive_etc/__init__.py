@@ -20,7 +20,7 @@ Basic usage::
 :license: MIT
 """
 
-from .motor import HDriveETC, Mode
+from .motor import HDriveETC, Mode, Error
 from .exceptions import (
     HDriveError,
     ConnectionError,
@@ -33,6 +33,7 @@ __version__ = "0.1.1"
 __all__ = [
     "HDriveETC",
     "Mode",
+    "Error",
     "HDriveError",
     "ConnectionError",
     "CommunicationError",

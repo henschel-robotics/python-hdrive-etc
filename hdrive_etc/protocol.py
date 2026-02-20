@@ -151,7 +151,7 @@ def decode_rx_pdo(data):
      _obj_6691, _obj_6692, _pad8, _pad16) = struct.unpack_from(fmt_motor, data, 0)
 
     result = {
-        "position": position,
+        "position": position * 0.1,
         "velocity": velocity,
         "torque": torque,
         "status": status,

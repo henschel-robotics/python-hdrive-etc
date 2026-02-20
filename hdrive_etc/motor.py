@@ -32,11 +32,11 @@ class Mode:
     POSITION = 8
     """Cyclic synchronous position mode (CSP)."""
 
-    VELOCITY = -3
-    """Cyclic synchronous velocity / stepper mode."""
+    VELOCITY = 2
+    """Cyclic synchronous velocity / (CSV) mode."""
 
     STEPPER = -3
-    """Alias for :attr:`VELOCITY`."""
+    """VELOCITY teppermotor mode."""
 
     TORQUE = 4
     """Cyclic synchronous torque mode (CST)."""
@@ -52,6 +52,39 @@ class Mode:
 
     STOP = 0
     """Motor disabled / stopped."""
+
+
+class Error:
+    """HDrive error codes (mirrors firmware ``Error.h``)."""
+
+    PROGRAM_ERROR_NULL_POINTER = 1
+    POSITION_OVER_OR_UNDERFLOW = 15
+    OVER_TEMPERATURE = 16
+    UNDER_VOLTAGE = 17
+    OVER_VOLTAGE = 18
+    OVER_SPEED = 19
+    POSITIVE_SOFTWARE_POSITION_LIMIT = 20
+    NEGATIVE_SOFTWARE_POSITION_LIMIT = 21
+    NEGATIVE_LIMIT_SWITCH_TRIGGERED = 22
+    POSITIVE_LIMIT_SWITCH_TRIGGERED = 23
+    LIMIT_SWITCH_TIMEOUT = 25
+    POS_SENSOR_ERROR = 26
+    POWER_STAGE_ERROR = 27
+    WATCHDOG_TIMEOUT = 28
+    SPI_POS_SENSOR_ERROR = 30
+    CALIB_ERROR = 31
+    WRONG_TICKET_FORMAT = 32
+    CONFIGURATION_ERROR = 33
+    IP_CONFIGURATION_ERROR = 34
+    CONFIGURATION_FILE_WRONG_FORMAT = 35
+    OBJECT_NOT_FOUND_IN_DICTIONARY = 36
+    HARDWARE_NOT_COMPATIBLE = 37
+    ETHERCAT_CONNECTION_INTERRUPTED = 38
+    CAN_SPECIAL_COMMAND_NOT_FOUND = 40
+    LIMIT_SWITCH_MIN_DISTANCE_TO_END_SWITCH = 50
+    MOTOR_MODE_NOT_EXISTING = 51
+    WRONG_ARGUMENT_COUNT_IN_TICKET = 52
+    NULL_POINTER_ERROR = 53
 
 
 class HDriveETC:
@@ -111,6 +144,10 @@ class HDriveETC:
         self._cycle_time_max = 0.0
         self._cycle_time_sum = 0.0
         self._last_cycle_time = None
+
+        # Auto-reconnect
+        self.auto_reconnect = True
+        self._reconnecting = threading.Event()
 
         # Setpoints (thread-safe via lock)
         self._target_position = 0
@@ -256,13 +293,13 @@ class HDriveETC:
             self._target_mode = mode
 
     def set_position(self, position):
-        """Set target position in encoder increments.
+        """Set target position in degrees.
 
         Args:
-            position: Target position (int).
+            position: Target position (float).
         """
         with self._lock:
-            self._target_position = int(position)
+            self._target_position = int(position * 10)
 
     def set_velocity(self, velocity):
         """Set target velocity.
@@ -410,14 +447,16 @@ class HDriveETC:
     # SDO read / write
     # ------------------------------------------------------------------
 
-    def read_sdo(self, index, subindex, data_type="I"):
+    def read_sdo(self, index, subindex, data_type=None):
         """Read an SDO object from the drive.
 
         Args:
             index: Object index (e.g. ``0x6660``).
             subindex: Object subindex.
-            data_type: :mod:`struct` format character
+            data_type: Optional :mod:`struct` format character
                 (``'I'`` = UINT32, ``'H'`` = UINT16, ``'i'`` = INT32, …).
+                When *None* (default) the size is auto-detected from the
+                slave response and unpacked as an unsigned integer.
 
         Returns:
             The unpacked value, or ``None`` on error.
@@ -426,27 +465,55 @@ class HDriveETC:
             raise CommunicationError("Not connected")
         try:
             slave = self.master.slaves[self.slave_index]
-            size = struct.calcsize(f"<{data_type}")
-            data_bytes = slave.sdo_read(index, subindex, size)
-            if data_bytes and len(data_bytes) >= size:
-                return struct.unpack(f"<{data_type}", data_bytes)[0]
-            return None
+            if data_type is not None:
+                size = struct.calcsize(f"<{data_type}")
+                data_bytes = slave.sdo_read(index, subindex, size)
+                if data_bytes and len(data_bytes) >= size:
+                    return struct.unpack(f"<{data_type}", data_bytes[:size])[0]
+                return None
+            data_bytes = slave.sdo_read(index, subindex)
+            if not data_bytes:
+                return None
+            n = len(data_bytes)
+            if n >= 4:
+                return struct.unpack("<I", data_bytes[:4])[0]
+            if n >= 2:
+                return struct.unpack("<H", data_bytes[:2])[0]
+            return data_bytes[0]
         except Exception as exc:
-            print(f"Error reading SDO {index:04X}:{subindex:02X}: {exc}")
+            print(f"Error reading SDO 0x{index:04X}:0x{subindex:02X}: {exc}")
             return None
 
-    def write_sdo(self, index, subindex, value):
-        """Write a UINT32 value to an SDO object.
+    def write_sdo(self, index, subindex, value, data_type=None):
+        """Write a value to an SDO object.
+
+        The data size is determined automatically: it first tries 4 bytes
+        (UINT32), then 2 bytes (UINT16), then 1 byte (UINT8).  Pass
+        *data_type* explicitly to force a specific packing format.
 
         Args:
             index: Object index.
             subindex: Object subindex.
             value: Integer value to write.
+            data_type: Optional :mod:`struct` format character.
         """
         if not self.master:
             raise CommunicationError("Not connected")
         slave = self.master.slaves[self.slave_index]
-        slave.sdo_write(index, subindex, struct.pack("<I", int(value)))
+        val = int(value)
+        if data_type is not None:
+            slave.sdo_write(index, subindex, struct.pack(f"<{data_type}", val))
+            return
+        formats = ("i", "h", "b") if val < 0 else ("I", "H", "B")
+        for fmt in formats:
+            try:
+                slave.sdo_write(index, subindex, struct.pack(f"<{fmt}", val))
+                return
+            except Exception:
+                continue
+        raise CommunicationError(
+            f"Failed to write SDO 0x{index:04X}:0x{subindex:02X}"
+        )
 
     # ------------------------------------------------------------------
     # Error handling
@@ -533,14 +600,11 @@ class HDriveETC:
             velocity_bw: Velocity bandwidth (subindex 2, optional).
             position_bw: Position bandwidth (subindex 3, optional).
         """
-        if not self.master:
-            raise CommunicationError("Not connected")
-        slave = self.master.slaves[self.slave_index]
-        slave.sdo_write(0x6640, 0x01, struct.pack("<I", int(torque_bw)))
+        self.write_sdo(0x6640, 0x01, int(torque_bw))
         if velocity_bw is not None:
-            slave.sdo_write(0x6640, 0x02, struct.pack("<I", int(velocity_bw)))
+            self.write_sdo(0x6640, 0x02, int(velocity_bw))
         if position_bw is not None:
-            slave.sdo_write(0x6640, 0x03, struct.pack("<I", int(position_bw)))
+            self.write_sdo(0x6640, 0x03, int(position_bw))
 
     def trigger_parameter_calculation(self):
         """Trigger firmware parameter recalculation (0x6637 = 1)."""
@@ -570,6 +634,90 @@ class HDriveETC:
     # ------------------------------------------------------------------
     # Internal: threads
     # ------------------------------------------------------------------
+
+    def _attempt_reconnect(self):
+        """Tear down the master and rebuild the connection from scratch.
+
+        Called by ``_check_loop`` when sustained communication loss is
+        detected.  The ``_reconnecting`` event pauses the processdata
+        and PDO threads while the master is being rebuilt.
+        """
+        self._reconnecting.set()
+        self.master.in_op = False
+        print("[RECONNECT] Connection lost — attempting reconnect ...")
+
+        # Give processdata / PDO loops time to see the flag and pause
+        time.sleep(0.1)
+
+        try:
+            self.master.close()
+        except Exception:
+            pass
+
+        backoff = 1.0
+        while not self._check_stop_event.is_set():
+            try:
+                adapters = pysoem.find_adapters()
+                if self.adapter_index >= len(adapters):
+                    raise CommunicationError("Adapter not found")
+
+                adapter = adapters[self.adapter_index]
+                self.master = pysoem.Master()
+                self.master.open(adapter.name)
+                self.master.in_op = False
+                self.master.do_check_state = False
+
+                if self.master.config_init() <= 0:
+                    raise CommunicationError("No EtherCAT slaves found")
+
+                for slave in self.master.slaves:
+                    slave.is_lost = False
+
+                configure_pdo_mapping(self.master.slaves[self.slave_index])
+                self.master.config_map()
+
+                if self.master.state_check(
+                    pysoem.SAFEOP_STATE, 50000
+                ) != pysoem.SAFEOP_STATE:
+                    raise CommunicationError("Failed to reach SAFE-OP")
+
+                tx_init = encode_tx_pdo(0, 0, 0, Mode.TORQUE, 0x0006, None)
+                self.master.slaves[self.slave_index].output = tx_init
+
+                self.master.state = pysoem.OP_STATE
+                self.master.write_state()
+
+                # Pump processdata while waiting for OP transition
+                deadline = time.time() + 5.0
+                reached_op = False
+                while time.time() < deadline:
+                    self.master.send_processdata()
+                    self.master.receive_processdata(self.rx_timeout_us)
+                    if self.master.state_check(
+                        pysoem.OP_STATE, 1000
+                    ) == pysoem.OP_STATE:
+                        reached_op = True
+                        break
+                    time.sleep(0.005)
+
+                if not reached_op:
+                    raise CommunicationError("Failed to reach OP")
+
+                self.master.in_op = True
+                self._comm_error_count = 0
+                self._reconnecting.clear()
+                print("[RECONNECT] Successfully reconnected!")
+                return
+
+            except Exception as exc:
+                print(f"[RECONNECT] Attempt failed: {exc}  — retrying in {backoff:.0f}s")
+                try:
+                    self.master.close()
+                except Exception:
+                    pass
+                self.master = None
+                self._check_stop_event.wait(backoff)
+                backoff = min(backoff * 2, 10.0)
 
     def _safe_stop(self):
         """Zero setpoints and wait for the state machine to leave OP."""
@@ -634,15 +782,21 @@ class HDriveETC:
     def _processdata_loop(self):
         """Fast send/receive — 5 ms cycle.  No locks, no processing."""
         while not self._pd_stop_event.is_set():
-            self.master.send_processdata()
-            self._actual_wkc = self.master.receive_processdata(10000)
+            if self._reconnecting.is_set():
+                time.sleep(0.05)
+                continue
+            try:
+                self.master.send_processdata()
+                self._actual_wkc = self.master.receive_processdata(10000)
 
-            if self._actual_wkc != self.master.expected_wkc:
+                if self._actual_wkc != self.master.expected_wkc:
+                    self._comm_error_count += 1
+                    if self.master.in_op:
+                        self.master.do_check_state = True
+                else:
+                    self._comm_ok_count += 1
+            except Exception:
                 self._comm_error_count += 1
-                if self.master.in_op:
-                    self.master.do_check_state = True
-            else:
-                self._comm_ok_count += 1
 
             time.sleep(0.001)
 
@@ -652,55 +806,91 @@ class HDriveETC:
         pdo_cycle_count = 0
 
         while not self._pdo_stop_event.is_set():
-            pdo_cycle_count += 1
+            if self._reconnecting.is_set():
+                time.sleep(0.05)
+                continue
+            try:
+                pdo_cycle_count += 1
 
-            if pdo_cycle_count % 20 == 0 and self._comm_error_count > 0:
-                print(f"[PDO {pdo_cycle_count}] Comm errors: {self._comm_error_count}")
+                if pdo_cycle_count % 20 == 0 and self._comm_error_count > 0:
+                    print(f"[PDO {pdo_cycle_count}] Comm errors: {self._comm_error_count}")
 
-            rx_raw = bytes(self.master.slaves[self.slave_index].input)
-            rx = decode_rx_pdo(rx_raw)
-            if rx:
-                state = cia402_state_from_status(rx["status"])
+                rx_raw = bytes(self.master.slaves[self.slave_index].input)
+                rx = decode_rx_pdo(rx_raw)
+                if rx:
+                    state = cia402_state_from_status(rx["status"])
 
-                if self._manual_controlword is not None:
-                    control_word = self._manual_controlword
-                else:
-                    control_word = next_control_word(state)
+                    if self._manual_controlword is not None:
+                        control_word = self._manual_controlword
+                    else:
+                        control_word = next_control_word(state)
 
-                self._state.update(rx)
-                self._state["state_name"] = state
-                self._last_wkc = self._comm_ok_count
+                    self._state.update(rx)
+                    self._state["state_name"] = state
+                    self._last_wkc = self._comm_ok_count
 
-            target_position = self._target_position
-            target_velocity = self._target_velocity
-            target_torque = self._target_torque
-            mode = self._target_mode
-            debug_outputs = self._target_debug_outputs
+                target_position = self._target_position
+                target_velocity = self._target_velocity
+                target_torque = self._target_torque
+                mode = self._target_mode
+                debug_outputs = self._target_debug_outputs
 
-            tx_raw = encode_tx_pdo(
-                target_position, target_velocity, target_torque,
-                mode, control_word, debug_outputs,
-            )
-            self.master.slaves[self.slave_index].output = tx_raw
+                tx_raw = encode_tx_pdo(
+                    target_position, target_velocity, target_torque,
+                    mode, control_word, debug_outputs,
+                )
+                self.master.slaves[self.slave_index].output = tx_raw
+            except Exception:
+                pass
 
             time.sleep(self.cycle_time)
 
     def _check_loop(self):
         """Monitor slave health and attempt recovery — 10 ms cycle."""
+        _consecutive_lost = 0
+        _RECONNECT_THRESHOLD = 200  # ~2 seconds of sustained failure
+
         while not self._check_stop_event.is_set():
-            if self.master.in_op and (
-                (self._actual_wkc < self.master.expected_wkc) or self.master.do_check_state
+            if self._reconnecting.is_set():
+                _consecutive_lost = 0
+                time.sleep(0.1)
+                continue
+
+            try:
+                if self.master and self.master.in_op and (
+                    (self._actual_wkc < self.master.expected_wkc)
+                    or self.master.do_check_state
+                ):
+                    self.master.do_check_state = False
+                    self.master.read_state()
+
+                    all_ok = True
+                    for i, slave in enumerate(self.master.slaves):
+                        if slave.state != pysoem.OP_STATE:
+                            all_ok = False
+                            self.master.do_check_state = True
+                            self._recover_slave(slave, i)
+
+                    if not self.master.do_check_state:
+                        _consecutive_lost = 0
+                        print("[STATE CHECK] All slaves resumed OPERATIONAL")
+                    elif not all_ok:
+                        _consecutive_lost += 1
+                else:
+                    _consecutive_lost = 0
+
+            except Exception:
+                _consecutive_lost += 1
+
+            if (
+                _consecutive_lost >= _RECONNECT_THRESHOLD
+                and self.auto_reconnect
+                and not self._reconnecting.is_set()
             ):
-                self.master.do_check_state = False
-                self.master.read_state()
-
-                for i, slave in enumerate(self.master.slaves):
-                    if slave.state != pysoem.OP_STATE:
-                        self.master.do_check_state = True
-                        self._recover_slave(slave, i)
-
-                if not self.master.do_check_state:
-                    print("[STATE CHECK] All slaves resumed OPERATIONAL")
+                print(f"[STATE CHECK] Lost contact for "
+                      f"{_consecutive_lost * 0.01:.1f}s — triggering reconnect")
+                _consecutive_lost = 0
+                self._attempt_reconnect()
 
             time.sleep(0.01)
 

@@ -202,8 +202,11 @@ See the [`examples/`](examples/) folder:
 
 - Python 3.8+
 - [PySOEM](https://github.com/bnjmnp/pysoem) >= 1.1.0
+- [Npcap](https://npcap.com/) or WinPcap (Windows only)
+  - **Important:** During Npcap installation, check **"Install Npcap in WinPcap API-compatible Mode"**
 - EtherCAT-compatible network adapter
 - HDrive servo motor with EtherCAT interface
+- For USB-to-Ethernet adapters, use one based on the **ASIX AX88772** chipset (recommended for reliable real-time EtherCAT communication) e.g. TU2-ET100
 
 ## License
 
