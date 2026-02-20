@@ -804,6 +804,7 @@ class HDriveETC:
         """Decode RX, run state machine, encode TX — cycle_time."""
         control_word = 0x0006
         pdo_cycle_count = 0
+        _last_reported_errors = 0
 
         while not self._pdo_stop_event.is_set():
             if self._reconnecting.is_set():
@@ -812,7 +813,8 @@ class HDriveETC:
             try:
                 pdo_cycle_count += 1
 
-                if pdo_cycle_count % 20 == 0 and self._comm_error_count > 0:
+                if pdo_cycle_count % 20 == 0 and self._comm_error_count > _last_reported_errors:
+                    _last_reported_errors = self._comm_error_count
                     print(f"[PDO {pdo_cycle_count}] Comm errors: {self._comm_error_count}")
 
                 rx_raw = bytes(self.master.slaves[self.slave_index].input)
