@@ -705,8 +705,14 @@ class HDriveETC:
 
                 self.master.in_op = True
                 self._comm_error_count = 0
+                with self._lock:
+                    self._target_mode = Mode.STOP
+                    self._target_position = 0
+                    self._target_velocity = 0
+                    self._target_torque = 0
+                    self._manual_controlword = 0x0006
                 self._reconnecting.clear()
-                print("[RECONNECT] Successfully reconnected!")
+                print("[RECONNECT] Successfully reconnected — motor held in STOP")
                 return
 
             except Exception as exc:
