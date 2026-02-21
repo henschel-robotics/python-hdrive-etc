@@ -1,0 +1,2140 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>host = "/"; let UPDATE = true;</script>
+    <script type="text/javascript" src="js/mainfunctions.js?v=2"></script>
+    <script type="text/javascript" src="js/plotly.min.js"></script>
+    <script type="text/javascript" src="js/generators.js?v=3"></script>
+
+    <link rel="stylesheet" href="css/style.css?v=5" />
+    <link rel="icon" href="logo_25_smal_inv.svg" type="image/svg+xml" />
+    <title>HDrive ETC — Motor Control</title>
+</head>
+
+<body>
+    <div id="emergencyStop" class="emergency-stop" onclick="emergencyStop()" style="display:none">STOP</div>
+
+    <dialog id="modalInfoWindow">
+        <h2>Details</h2>
+        <div id="modalInfoWindowText"></div>
+        <div id="modalButtons"></div>
+    </dialog>
+
+    <nav class="menu">
+        <div class="logo"></div>
+        <ul>
+            <li class="item home-icon" id="home">
+                <a onclick="showContent('homeCont_');">Home</a>
+            </li>
+            <hr />
+            <li class="item control-icon" id="messages">
+                <a href="#messages">
+                    Control
+                    <div class="arrow"></div>
+                </a>
+                <div class="smenu">
+                    <a onclick="showContent('torqueCont_'); loadControlView('torqueCont_');">Torque</a>
+                    <a onclick="showContent('speedCont_'); loadControlView('speedCont_');">Speed</a>
+                    <a onclick="showContent('posCont_'); loadControlView('posCont_');">Position</a>
+                    <a onclick="showContent('sequencer_'); loadControlView('sequencer_');">Sequencer</a>
+                </div>
+            </li>
+
+            <li class="item tuning-icon" id="tuning">
+                <a href="#tuning">
+                    Drive Tuning
+                    <div class="arrow"></div>
+                </a>
+                <div class="smenu">
+                    <a onclick="showContent('tuning_stepResponse_');">Step Response</a>
+                    <a onclick="showContent('tuning_bodePlot_');">Bode Plot</a>
+                    <a onclick="showContent('tuning_inertiaId_');">Inertia Identification</a>
+                    <a onclick="showContent('tuning_networkTest_');">Network Test</a>
+                </div>
+            </li>
+
+            <li class="item settings-icon" id="settings">
+                <a href="#settings">
+                    Settings
+                    <div class="arrow"></div>
+                </a>
+                <div class="smenu">
+                    <a onclick="showContent('motorCont');">Motor</a>
+                    <a onclick="showContent('controlCont');">Control</a>
+                </div>
+            </li>
+            <li class="item maint-icon" id="profile">
+                <a onclick="showContent('maintCont');">Maintenance</a>
+            </li>
+            <li class="item network-icon" id="network">
+                <a onclick="showContent('networkCont');">EtherCAT Config</a>
+            </li>
+
+            <hr />
+            <li class="item support-icon" id="support">
+                <a onclick="showContent('supCont');">Support</a>
+            </li>
+        </ul>
+        <div class="menu-footer">
+            <span>GUI v0.1.0</span>
+            <span>&copy; 2026 Henschel Robotics GmbH</span>
+        </div>
+    </nav>
+
+    <aside class="liveView">
+        <div class="liveBig">
+            <h5>Live values</h5>
+        </div>
+        <div id="actualLiveBig" class="liveBig"></div>
+        <hr />
+        <div id="driveSystemLive" class="liveSmall"></div>
+        <hr />
+        <div id="demandedValuesLive" class="liveSmall"></div>
+        <hr />
+        <div id="cia402Live" class="liveSmall"></div>
+    </aside>
+
+    <aside class="liveView" id="debugValues">
+        <div class="liveBig">
+            <h5>Debug</h5>
+        </div>
+        <div style="overflow: visible;" id="debugValuesList"></div>
+    </aside>
+
+    <main class="content">
+        <div class="mainWrapper">
+            <div id="homeCont_" style="display: block">
+                <!-- Status bar -->
+                <div class="home-status">
+                    <div class="home-status-left">
+                        <h1>HDrive ETC</h1>
+                        <span class="home-meta">FW <span id="home-fw">—</span> · Mode <span id="home-mode">—</span></span>
+                    </div>
+                    <div id="home-state-badge" class="home-badge home-badge--idle">IDLE</div>
+                </div>
+
+                <!-- Big gauges row -->
+                <div class="gauge-row">
+                                <div class="gauge-card gauge-card--display">
+                        <div class="gauge-value gauge-value--position" id="gauge-pos-val">0</div>
+                        <div class="gauge-label">Position</div>
+                        <div class="gauge-unit">deg</div>
+                    </div>
+                    <div class="gauge-card">
+                        <svg class="gauge-svg" viewBox="0 0 120 90">
+                            <path class="gauge-bg" d="M10,80 A50,50 0 1,1 110,80" />
+                            <path class="gauge-fill gauge-fill--cyan" id="gauge-spd-fill" d="M10,80 A50,50 0 1,1 110,80" />
+                        </svg>
+                        <div class="gauge-value" id="gauge-spd-val">0</div>
+                        <div class="gauge-label">Speed</div>
+                        <div class="gauge-unit">RPM</div>
+                    </div>
+                    <div class="gauge-card">
+                        <svg class="gauge-svg" viewBox="0 0 120 90">
+                            <path class="gauge-bg" d="M10,80 A50,50 0 1,1 110,80" />
+                            <path class="gauge-fill gauge-fill--orange" id="gauge-trq-fill" d="M10,80 A50,50 0 1,1 110,80" />
+                        </svg>
+                        <div class="gauge-value" id="gauge-trq-val">0</div>
+                        <div class="gauge-label">Torque</div>
+                        <div class="gauge-unit">%</div>
+                    </div>
+                </div>
+
+                <!-- Small gauges row -->
+                <div class="gauge-row gauge-row--small">
+                    <div class="gauge-card gauge-card--small">
+                        <svg class="gauge-svg" viewBox="0 0 120 90">
+                            <path class="gauge-bg" d="M10,80 A50,50 0 1,1 110,80" />
+                            <path class="gauge-fill gauge-fill--temp" id="gauge-temp-fill" d="M10,80 A50,50 0 1,1 110,80" />
+                        </svg>
+                        <div class="gauge-value" id="gauge-temp-val">0</div>
+                        <div class="gauge-label">Temperature</div>
+                        <div class="gauge-unit">&deg;C</div>
+                    </div>
+                    <div class="gauge-card gauge-card--small">
+                        <svg class="gauge-svg" viewBox="0 0 120 90">
+                            <path class="gauge-bg" d="M10,80 A50,50 0 1,1 110,80" />
+                            <path class="gauge-fill gauge-fill--green" id="gauge-volt-fill" d="M10,80 A50,50 0 1,1 110,80" />
+                        </svg>
+                        <div class="gauge-value" id="gauge-volt-val">0</div>
+                        <div class="gauge-label">Voltage</div>
+                        <div class="gauge-unit">V</div>
+                    </div>
+                    <div class="gauge-card gauge-card--small">
+                        <svg class="gauge-svg" viewBox="0 0 120 90">
+                            <path class="gauge-bg" d="M10,80 A50,50 0 1,1 110,80" />
+                            <path class="gauge-fill gauge-fill--green" id="gauge-thermal-fill" d="M10,80 A50,50 0 1,1 110,80" />
+                        </svg>
+                        <div class="gauge-value" id="gauge-thermal-val">0%</div>
+                        <div class="gauge-label">Thermal</div>
+                        <div class="gauge-unit">derating</div>
+                    </div>
+                    <div class="gauge-card gauge-card--small">
+                        <div class="gauge-error-display">
+                            <div class="gauge-value gauge-value--error" id="gauge-error-val">0</div>
+                            <div class="clear-error-btn" id="clearErrorBtn" onclick="clearError()" title="Clear error">✕</div>
+                        </div>
+                        <div class="gauge-label">Last Error</div>
+                        <div class="gauge-unit" id="gauge-error-desc">No error</div>
+                    </div>
+                    <div class="gauge-card gauge-card--small">
+                        <div class="din-leds">
+                            <div class="din-led" id="din-led1"><span class="din-dot"></span> IN 1</div>
+                            <div class="din-led" id="din-led2"><span class="din-dot"></span> IN 2</div>
+                        </div>
+                        <div class="gauge-label">Digital In</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- control views (graph shown when id ends with _) -->
+            <div id="torqueCont_" style="display: none"></div>
+            <div id="speedCont_" style="display: none"></div>
+            <div id="posCont_" style="display: none"></div>
+            <div id="sequencer_" style="display: none"></div>
+
+            <!-- tuning views -->
+            <div id="tuning_stepResponse_" style="display: none"></div>
+            <div id="tuning_bodePlot_" style="display: none"></div>
+            <div id="tuning_inertiaId_" style="display: none"></div>
+            <div id="tuning_networkTest_" style="display: none"></div>
+
+            <!-- settings views -->
+            <div id="motorCont" style="display: none"></div>
+            <div id="controlCont" style="display: none"></div>
+            <div id="digiCont" style="display: none"></div>
+            <div id="maintCont" style="display: none"></div>
+            <div id="networkCont" style="display: none"></div>
+            <div id="supCont" style="display: none">
+                <h1>Support</h1>
+                <p> <a target="_blank" href="https://henschel-robotics.ch/support">Support</a></p>
+                <p> Contact <a href="mailto:info@henschel-robotics.ch">info@henschel-robotics.ch</a></p>
+            </div>
+
+            <div id="graphContainer">
+                <div id="div_g" class="plotly-container"></div>
+                <div id="graphControl" class="graphControlStyle"
+                    onclick="grafIsZoomed=0; Plotly.relayout('div_g', {'xaxis.autorange': true, 'yaxis.autorange': true}); this.style.display='none';">
+                    Continue graph
+                </div>
+                <div class="graf_toggle_switch" id="graf_toggle_switch"></div>
+            </div>
+        </div>
+    </main>
+
+</body>
+
+<script>
+    // Gauge arc helper
+    // The SVG arc path length is ~172 units (half-circle from 10,80 to 110,80 with r=50)
+    const GAUGE_ARC_LEN = 172;
+
+    function setGauge(fillId, fraction) {
+        const el = document.getElementById(fillId);
+        if (!el) return;
+        const clamped = Math.max(0, Math.min(1, fraction));
+        el.style.strokeDashoffset = GAUGE_ARC_LEN * (1 - clamped);
+    }
+
+    const MODE_NAMES = { 0: "OFF", 128: "TORQUE", 130: "SPEED", 133: "POSITION", 129: "POS+PATH", 134: "STEPPER" };
+    const CIA402_MODE_NAMES = { 0: "OFF", 1: "Profile Position", 2: "Velocity", 3: "Profile Velocity", 4: "Torque", 8: "Position", "-3": "Stepper", "-99": "Calibration" };
+
+    const ERROR_CODES = {
+        0: "No error",
+        1: "Program error - Null pointer",
+        15: "Position overflow/underflow",
+        16: "Over temperature",
+        17: "Under voltage",
+        18: "Over voltage",
+        19: "Over speed",
+        20: "Positive software position limit",
+        21: "Negative software position limit",
+        22: "Negative limit switch triggered",
+        23: "Positive limit switch triggered",
+        25: "Limit switch timeout",
+        26: "Position sensor error",
+        27: "Power stage error",
+        28: "Watchdog timeout",
+        30: "SPI position sensor error",
+        31: "Calibration error",
+        32: "Wrong ticket format",
+        33: "Configuration error",
+        34: "IP configuration error",
+        35: "Configuration file wrong format",
+        36: "Object not found in dictionary",
+        37: "Hardware not compatible",
+        38: "EtherCAT connection interrupted",
+        40: "CAN special command not found",
+        50: "Limit switch min distance to end switch",
+        51: "Motor mode not existing",
+        52: "Wrong argument count in ticket",
+        53: "Null pointer error",
+    };
+
+    function decodeCiA402State(sw) {
+        sw = sw | 0;
+        if ((sw & 0x4F) === 0x00) return "Not ready";
+        if ((sw & 0x4F) === 0x40) return "Switch on disabled";
+        if ((sw & 0x6F) === 0x21) return "Ready";
+        if ((sw & 0x6F) === 0x23) return "Switched on";
+        if ((sw & 0x6F) === 0x27) return "Enabled";
+        if ((sw & 0x6F) === 0x07) return "Quick stop";
+        if ((sw & 0x4F) === 0x0F) return "Fault reaction";
+        if ((sw & 0x4F) === 0x08) return "Fault";
+        return "0x" + sw.toString(16);
+    }
+
+    var _cia402Labels = [
+        "Ready", "Switched On", "Op Enabled", "Fault",
+        "Voltage", "Quick Stop", "Sw Disabled", "Warning",
+        null, "Remote", "Target Rchd", "Limit"
+    ];
+
+    function updateHomeGauges(byteArray) {
+        // Unpack from the 20-float packet
+        const pos     = byteArray[1];          // position (deg)
+        const speed   = byteArray[2];          // velocity
+        const torque  = byteArray[6];          // actual torque (0x6077)
+        const thermal = byteArray[5];          // thermal derating factor (0..1)
+        const temp    = byteArray[8];          // temperature (°C)
+        const volt    = byteArray[10];         // supply voltage (V)
+        const mode    = byteArray[9] | 0;      // mode of operation
+        objectsFromDrive.set("99,0", mode !== 0 ? 1 : 0);
+        const stopBtn = byId("emergencyStop");
+        if (stopBtn) stopBtn.style.display = mode !== 0 ? "flex" : "none";
+        const fw      = objectsFromDrive.get("100a,0") || "—";
+        const lastErr = byteArray[7] | 0;      // error code
+        const digIn   = byteArray[14] | 0;     // digital inputs
+
+        // Values
+        const gv = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+        gv("gauge-pos-val",  pos.toFixed(1));
+        gv("gauge-spd-val",  speed.toFixed(0));
+        gv("gauge-trq-val",  torque.toFixed(0));
+        gv("gauge-temp-val", temp.toFixed(1));
+        gv("gauge-volt-val", volt.toFixed(1));
+        gv("gauge-thermal-val", thermal.toFixed(2) * 100 + "%");
+        gv("gauge-error-val", lastErr);
+        gv("gauge-error-desc", ERROR_CODES[lastErr] || ("Unknown error " + lastErr));
+        const clrBtn = byId("clearErrorBtn");
+        if (clrBtn) clrBtn.style.display = lastErr !== 0 ? "flex" : "none";
+        const led1 = byId("din-led1");
+        const led2 = byId("din-led2");
+        if (led1) led1.classList.toggle("on", !!(digIn & 1));
+        if (led2) led2.classList.toggle("on", !!(digIn & 2));
+
+        // Status bar
+        gv("home-fw", fw);
+        gv("home-mode", CIA402_MODE_NAMES[mode] || ("Mode " + mode));
+
+        // Badge
+        const badge = document.getElementById("home-state-badge");
+        if (badge) {
+            if (lastErr !== 0) {
+                badge.textContent = "ERROR";
+                badge.className = "home-badge home-badge--error";
+            } else if (mode > 0) {
+                badge.textContent = "ACTIVE";
+                badge.className = "home-badge home-badge--active";
+            } else {
+                badge.textContent = "IDLE";
+                badge.className = "home-badge home-badge--idle";
+            }
+        }
+
+        // Gauge arcs (fraction of max) — position has no gauge (unbounded)
+        setGauge("gauge-spd-fill",  Math.abs(speed) / 3000);  // speed ±3000 RPM
+        setGauge("gauge-trq-fill",  Math.abs(torque) / 100);
+        setGauge("gauge-temp-fill", temp / 80);
+        setGauge("gauge-volt-fill", volt / 48);
+        setGauge("gauge-thermal-fill", thermal);
+    }
+
+    // --- Clear error ---
+
+    function clearError() {
+        ROM_writeOBJ("6637", "0", 100);
+    }
+
+    // --- Start calibration (mode -99) ---
+
+    function startCalibration() {
+        if (!confirm("Start motor calibration? The motor will move during this process.")) return;
+        fetch(host + "api/calibrate").catch(() => {});
+    }
+
+    // --- Reset position to zero ---
+
+    async function resetPositionToZero() {
+        await ROM_writeOBJ("6637", "0", 4);
+        setTimeout(() => ROM_writeOBJ("6637", "0", 0), 1000);
+    }
+
+    // --- Apply motor settings (trigger parameter recalculation) ---
+
+    async function applyMotorSettings() {
+        for (const [index, subindex] of fieldstoUpdate) {
+            const el = document.getElementById("m" + index + "s" + subindex);
+            if (!el) continue;
+            const val = parseInt(el.value);
+            if (isNaN(val)) continue;
+            const stored = getObjValue(index, subindex);
+            if (stored !== undefined && stored != val) {
+                await ROM_writeOBJ(index, subindex, val);
+                objectsFromDrive.set(index + "," + subindex, val);
+                el.style.color = '';
+                el.style.borderLeft = '';
+            }
+        }
+        await ROM_writeOBJ("6637", "0", 1);
+    }
+
+    // --- Emergency stop ---
+
+    function emergencyStop() {
+        if (_seqRunning) stopSequencer();
+        ROM_writeOBJ("99", "0", 0);
+        fetch(host + "api/abort_test").catch(() => {});
+        const btn = byId("emergencyStop");
+        btn.classList.add("emergency-stop--triggered");
+        setTimeout(() => btn.classList.remove("emergency-stop--triggered"), 600);
+    }
+
+    // --- Position sequencer ---
+
+    let _seqRunning = false;
+    let _seqTimer = null;
+
+    function toggleSequencer() {
+        if (_seqRunning) {
+            stopSequencer();
+        } else {
+            startSequencer();
+        }
+    }
+
+    function startSequencer() {
+        const posA = parseFloat(byId("m82s0")?.value) || 90;
+        const posB = parseFloat(byId("m82s1")?.value) || -90;
+        const dwell = parseInt(byId("m82s2")?.value) || 1000;
+
+        _seqRunning = true;
+        const btn = byId("seqStartBtn");
+        if (btn) { btn.textContent = "Stop Sequencing"; btn.classList.add("red"); }
+        const status = byId("seqStatus");
+        if (status) { status.textContent = "Running"; status.className = "test-status test-status--running"; }
+
+        let goingToA = true;
+        function step() {
+            if (!_seqRunning) return;
+            const target = goingToA ? posA : posB;
+            ROM_writeOBJ("607a", "0", target);
+            if (status) status.textContent = goingToA ? "→ Position A" : "→ Position B";
+            goingToA = !goingToA;
+            _seqTimer = setTimeout(step, dwell);
+        }
+        step();
+    }
+
+    function stopSequencer() {
+        _seqRunning = false;
+        if (_seqTimer) { clearTimeout(_seqTimer); _seqTimer = null; }
+        const btn = byId("seqStartBtn");
+        if (btn) { btn.textContent = "Start Sequencing"; btn.classList.remove("red"); }
+        const status = byId("seqStatus");
+        if (status) { status.textContent = "Stopped"; status.className = "test-status"; }
+    }
+
+    // --- Tuning test runners ---
+
+    async function runStepResponse() {
+        const stepSize     = byId("m80s0")?.value || 180;
+        const recordTime   = byId("m80s1")?.value || 2000;
+        const torqueLimit  = byId("m80s2")?.value || 300;
+        const bwCurrent    = byId("m80s3")?.value || 800;
+        const bwSpeed      = byId("m80s4")?.value || 0;
+        const bwPosition   = byId("m80s5")?.value || 20;
+        const inertia      = byId("m6633s0")?.value  || 100;
+        const damping      = byId("m6634s0")?.value  || 50;
+        const dampCurrent  = byId("m6620s1")?.value;
+        const dampPosition = byId("m6620s3")?.value;
+
+        const status = byId("stepResponseStatus");
+        status.textContent = "Writing parameters...";
+        status.className = "test-status test-status--running";
+
+        try {
+            const writes = [
+                ROM_writeOBJ("6640", "1", bwCurrent),
+                ROM_writeOBJ("6640", "3", bwPosition),
+                ROM_writeOBJ("6633", "0", inertia),
+                ROM_writeOBJ("6634", "0", damping),
+            ];
+            if (dampCurrent)  writes.push(ROM_writeOBJ("6620", "1", dampCurrent));
+            if (dampPosition) writes.push(ROM_writeOBJ("6620", "3", dampPosition));
+            await Promise.all(writes);
+            await ROM_writeOBJ("6637", "0", 1);
+        } catch (e) {
+            status.textContent = "Error writing params: " + e;
+            status.className = "test-status test-status--error";
+            return;
+        }
+
+        status.textContent = "Running...";
+
+        const params = new URLSearchParams({
+            step_size: stepSize, record_time: recordTime,
+            torque_limit: torqueLimit, inertia: inertia, damping: damping,
+            bw_current: bwCurrent, bw_speed: bwSpeed, bw_position: bwPosition
+        });
+
+        fetch(host + "api/run_step_response?" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    status.textContent = "Error: " + data.error;
+                    status.className = "test-status test-status--error";
+                } else {
+                    status.textContent = "Done";
+                    status.className = "test-status test-status--done";
+                    plotStepResponse(data);
+                }
+            })
+            .catch(err => {
+                status.textContent = "Failed: " + err;
+                status.className = "test-status test-status--error";
+            });
+    }
+
+    function plotStepResponse(data) {
+        const t = data.timestamps.map(v => v * 1000);
+        const m = data.metrics || {};
+
+        const metricsEl = byId("stepResponseMetrics");
+        if (metricsEl) {
+            const fmt = (v, unit, mul) => v != null ? (v * (mul || 1)).toFixed(1) + " " + unit : "—";
+            metricsEl.innerHTML =
+                "<div style='display:flex;gap:16px;flex-wrap:wrap;padding:8px 0'>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Rise Time</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(m.rise_time, "ms", 1000) + "</div></div>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Settling Time</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(m.settling_time, "ms", 1000) + "</div></div>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Overshoot</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(m.overshoot_percent, "%") + "</div></div>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Steady-State Error</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(m.steady_state_error, "deg") + "</div></div>" +
+                "</div>";
+        }
+
+        const traceTarget = {
+            x: t, y: data.target_positions, name: "Target",
+            mode: "lines", line: { color: "#94a3b8", width: 1.5, dash: "dash" }, yaxis: "y"
+        };
+        const traceActual = {
+            x: t, y: data.actual_positions, name: "Actual Position",
+            mode: "lines", line: { color: "#3b82f6", width: 2 }, yaxis: "y"
+        };
+        const traceVelocity = {
+            x: t, y: data.velocities, name: "Velocity",
+            mode: "lines", line: { color: "#ef4444", width: 1.5 }, yaxis: "y2"
+        };
+
+        const darkAxis = {
+            gridcolor: "#1e293b", zerolinecolor: "#253347",
+            tickfont: { color: "#94a3b8", size: 11 },
+            titlefont: { color: "#94a3b8", size: 12 }
+        };
+
+        const layout = {
+            paper_bgcolor: "rgba(0,0,0,0)",
+            plot_bgcolor: "#111722",
+            font: { family: "Inter, system-ui, sans-serif", color: "#e2e8f0" },
+            margin: { l: 60, r: 60, t: 30, b: 50 },
+            legend: { x: 0, y: 1.12, orientation: "h", font: { size: 12 }, bgcolor: "rgba(0,0,0,0)" },
+            xaxis: { title: "Time (ms)", ...darkAxis },
+            yaxis: { title: "Position (deg)", ...darkAxis, side: "left" },
+            yaxis2: {
+                title: "Velocity (deg/s)", ...darkAxis, side: "right",
+                overlaying: "y", showgrid: false
+            },
+            hovermode: "x unified",
+            hoverlabel: { bgcolor: "#1a2233", bordercolor: "#253347", font: { color: "#e2e8f0", size: 12 } }
+        };
+
+        const plotEl = byId("stepResponsePlot");
+        Plotly.newPlot(plotEl, [traceTarget, traceActual, traceVelocity], layout, {
+            responsive: true, displaylogo: false,
+            modeBarButtonsToRemove: ["lasso2d", "select2d"]
+        });
+        byId("stepResponseResult").style.display = "block";
+    }
+
+    async function runBodePlot() {
+        const startFreq   = byId("m81s0")?.value || 5;
+        const stopFreq    = byId("m81s1")?.value || 30;
+        const amplitude   = byId("m81s2")?.value || 100;
+        const bwCurrent   = byId("m81s3")?.value || 1000;
+        const bwSpeed     = byId("m81s4")?.value || 0;
+        const bwPosition  = byId("m81s5")?.value || 30;
+        const inertia     = byId("m6633s0")?.value  || 100;
+        const damping     = byId("m6634s0")?.value  || 50;
+        const dampCurrent  = byId("m6620s1")?.value;
+        const dampPosition = byId("m6620s3")?.value;
+
+        const status = byId("bodePlotStatus");
+        status.textContent = "Writing parameters...";
+        status.className = "test-status test-status--running";
+
+        try {
+            const writes = [
+                ROM_writeOBJ("6640", "1", bwCurrent),
+                ROM_writeOBJ("6640", "3", bwPosition),
+                ROM_writeOBJ("6633", "0", inertia),
+                ROM_writeOBJ("6634", "0", damping),
+            ];
+            if (dampCurrent)  writes.push(ROM_writeOBJ("6620", "1", dampCurrent));
+            if (dampPosition) writes.push(ROM_writeOBJ("6620", "3", dampPosition));
+            await Promise.all(writes);
+            await ROM_writeOBJ("6637", "0", 1);
+        } catch (e) {
+            status.textContent = "Error writing params: " + e;
+            status.className = "test-status test-status--error";
+            return;
+        }
+
+        status.textContent = "Running...";
+
+        const params = new URLSearchParams({
+            start_freq: startFreq, stop_freq: stopFreq,
+            amplitude: amplitude, inertia: inertia, damping: damping,
+            bw_current: bwCurrent, bw_speed: bwSpeed, bw_position: bwPosition
+        });
+
+        fetch(host + "api/run_bode_plot?" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    status.textContent = "Error: " + data.error;
+                    status.className = "test-status test-status--error";
+                } else {
+                    status.textContent = "Done";
+                    status.className = "test-status test-status--done";
+                    plotBodeResponse(data);
+                }
+            })
+            .catch(err => {
+                status.textContent = "Failed: " + err;
+                status.className = "test-status test-status--error";
+            });
+    }
+
+    function plotBodeResponse(data) {
+        const a = data.analysis || {};
+
+        const metricsEl = byId("bodePlotMetrics");
+        if (metricsEl) {
+            const fmt = (v, unit, dp) => v != null ? v.toFixed(dp != null ? dp : 1) + " " + unit : "—";
+            const stabilityColor = a.phase_margin != null
+                ? (a.phase_margin > 45 ? "var(--success)" : a.phase_margin > 30 ? "var(--warning)" : "var(--danger)")
+                : "var(--text)";
+            metricsEl.innerHTML =
+                "<div style='display:flex;gap:16px;flex-wrap:wrap;padding:8px 0'>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:130px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>DC Gain</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(a.dc_gain, "dB") + "</div></div>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:130px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Bandwidth (-3 dB)</div>" +
+                "<div style='font-size:20px;font-weight:700;color:var(--text);margin-top:4px'>" + fmt(a.bandwidth, "Hz") + "</div></div>" +
+                "<div style='background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:130px;text-align:center'>" +
+                "<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)'>Phase Margin</div>" +
+                "<div style='font-size:20px;font-weight:700;margin-top:4px;color:" + stabilityColor + "'>" + fmt(a.phase_margin, "\u00B0") + "</div></div>" +
+                "</div>";
+        }
+
+        const darkAxis = {
+            gridcolor: "#1e293b", zerolinecolor: "#253347",
+            tickfont: { color: "#94a3b8", size: 11 },
+            titlefont: { color: "#94a3b8", size: 12 }
+        };
+        const plotCfg = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
+        const baseMar = { l: 60, r: 24, t: 30, b: 50 };
+        const baseLayout = {
+            paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "#111722",
+            font: { family: "Inter, system-ui, sans-serif", color: "#e2e8f0" },
+            hovermode: "x unified",
+            hoverlabel: { bgcolor: "#1a2233", bordercolor: "#253347", font: { color: "#e2e8f0", size: 12 } }
+        };
+
+        // Gain plot
+        const traceGain = {
+            x: data.frequencies, y: data.gains_db, name: "Gain",
+            mode: "lines+markers", line: { color: "#3b82f6", width: 2 },
+            marker: { size: 6, color: "#3b82f6" }
+        };
+        const gainRef = a.dc_gain != null ? [{
+            type: "line", x0: data.frequencies[0], x1: data.frequencies[data.frequencies.length - 1],
+            y0: a.dc_gain - 3, y1: a.dc_gain - 3,
+            line: { color: "#ef4444", width: 1.5, dash: "dash" }
+        }] : [];
+        Plotly.newPlot(byId("bodePlotGain"), [traceGain], {
+            ...baseLayout, margin: { ...baseMar, b: 10 },
+            xaxis: { title: "", type: "log", ...darkAxis },
+            yaxis: { title: "Gain (dB)", ...darkAxis },
+            shapes: gainRef
+        }, plotCfg);
+
+        // Phase plot
+        const tracePhase = {
+            x: data.frequencies, y: data.phases_deg, name: "Phase",
+            mode: "lines+markers", line: { color: "#f59e0b", width: 2 },
+            marker: { size: 6, color: "#f59e0b" }
+        };
+        Plotly.newPlot(byId("bodePlotPhase"), [tracePhase], {
+            ...baseLayout, margin: baseMar,
+            xaxis: { title: "Frequency (Hz)", type: "log", ...darkAxis },
+            yaxis: { title: "Phase (\u00B0)", ...darkAxis },
+            shapes: [{
+                type: "line", x0: data.frequencies[0], x1: data.frequencies[data.frequencies.length - 1],
+                y0: -180, y1: -180,
+                line: { color: "#ef4444", width: 1, dash: "dot" }
+            }]
+        }, plotCfg);
+
+        byId("bodePlotResult").style.display = "block";
+    }
+
+    // --- Inertia Identification ---
+
+    function runInertiaTest() {
+        const torqueMNm  = byId("m82s0")?.value || 200;
+        const durationMs = byId("m82s1")?.value || 500;
+        const torqueLimit = byId("m82s2")?.value || 600;
+
+        const status = byId("inertiaTestStatus");
+        status.textContent = "Running...";
+        status.className = "test-status test-status--running";
+
+        const params = new URLSearchParams({
+            torque_mNm: torqueMNm,
+            duration_ms: durationMs,
+            torque_limit: torqueLimit
+        });
+
+        fetch(host + "api/run_inertia_test?" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    status.textContent = "Error: " + data.error;
+                    status.className = "test-status test-status--error";
+                } else {
+                    status.textContent = "Done";
+                    status.className = "test-status test-status--done";
+                    plotInertiaResult(data);
+                }
+            })
+            .catch(err => {
+                status.textContent = "Failed: " + err;
+                status.className = "test-status test-status--error";
+            });
+    }
+
+    function plotInertiaResult(data) {
+        const m = data.metrics || {};
+        const t = data.timestamps.map(v => v * 1000); // seconds -> ms
+
+        // Metric cards
+        const metricsEl = byId("inertiaTestMetrics");
+        if (metricsEl) {
+            const fmt = (v, unit, dp) => v != null ? v.toFixed(dp != null ? dp : 1) + " " + unit : "\u2014";
+            const r2color = m.r_squared != null
+                ? (m.r_squared > 0.95 ? "var(--success)" : m.r_squared > 0.8 ? "var(--warning)" : "var(--danger)")
+                : "var(--text)";
+            const cardStyle = "background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center";
+            const labelStyle = "font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)";
+            const valueStyle = "font-size:20px;font-weight:700;color:var(--text);margin-top:4px";
+            metricsEl.innerHTML =
+                "<div style='display:flex;gap:16px;flex-wrap:wrap;padding:8px 0'>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Inertia</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(m.inertia_gcm2, "g\u00B7cm\u00B2", 1) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Acceleration</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(m.acceleration_rad_s2, "rad/s\u00B2") + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Applied Torque</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(m.torque_mNm, "mNm", 0) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>R\u00B2 (fit quality)</div>" +
+                "<div style='" + valueStyle + ";color:" + r2color + "'>" + fmt(m.r_squared, "", 4) + "</div></div>" +
+                "</div>" +
+                "<div style='padding:8px 0'>" +
+                "<a class='btn' onclick='applyInertiaValue(" + Math.round(m.inertia_gcm2) + ")'>Apply " + Math.round(m.inertia_gcm2) + " g\u00B7cm\u00B2 to Motor Settings (0x6633)</a>" +
+                "</div>";
+        }
+
+        // Linear fit line — only in the ramp region
+        const fitSlope = m.fit_slope || 0;
+        const fitIntercept = m.fit_intercept || 0;
+        const tStart = (m.trim_start || 0) * 1000;
+        const tEnd = (m.trim_end || t[t.length - 1] / 1000) * 1000;
+        const fitT = [tStart, tEnd];
+        const fitV = fitT.map(ts => (fitSlope * (ts / 1000) + fitIntercept) * 60 / (2 * Math.PI));
+
+        const darkAxis = {
+            gridcolor: "#1e293b", zerolinecolor: "#253347",
+            tickfont: { color: "#94a3b8", size: 11 },
+            titlefont: { color: "#94a3b8", size: 12 }
+        };
+        const plotCfg = { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] };
+
+        const traceVelocity = {
+            x: t, y: data.velocities, name: "Measured Velocity",
+            mode: "lines", line: { color: "#3b82f6", width: 2 }
+        };
+        const traceFit = {
+            x: fitT, y: fitV, name: "Linear Fit (ramp)",
+            mode: "lines", line: { color: "#f59e0b", width: 3, dash: "dash" }
+        };
+
+        const trimShapes = [];
+        if (m.trim_start != null && m.trim_end != null) {
+            trimShapes.push(
+                { type: "rect", xref: "x", yref: "paper", x0: 0, x1: tStart, y0: 0, y1: 1, fillcolor: "rgba(100,100,100,0.15)", line: { width: 0 } },
+                { type: "rect", xref: "x", yref: "paper", x0: tEnd, x1: t[t.length - 1], y0: 0, y1: 1, fillcolor: "rgba(100,100,100,0.15)", line: { width: 0 } },
+                { type: "line", xref: "x", yref: "paper", x0: tStart, x1: tStart, y0: 0, y1: 1, line: { color: "#22c55e", width: 1.5, dash: "dot" } },
+                { type: "line", xref: "x", yref: "paper", x0: tEnd, x1: tEnd, y0: 0, y1: 1, line: { color: "#22c55e", width: 1.5, dash: "dot" } }
+            );
+        }
+
+        Plotly.newPlot(byId("inertiaTestPlot"), [traceVelocity, traceFit], {
+            paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "#111722",
+            font: { family: "Inter, system-ui, sans-serif", color: "#e2e8f0" },
+            hovermode: "x unified",
+            hoverlabel: { bgcolor: "#1a2233", bordercolor: "#253347", font: { color: "#e2e8f0", size: 12 } },
+            margin: { l: 60, r: 24, t: 30, b: 50 },
+            xaxis: { title: "Time (ms)", ...darkAxis },
+            yaxis: { title: "Velocity (RPM)", ...darkAxis },
+            legend: { x: 0.02, y: 0.98, bgcolor: "rgba(0,0,0,0.3)", font: { color: "#e2e8f0" } },
+            shapes: trimShapes
+        }, plotCfg);
+
+        byId("inertiaTestResult").style.display = "block";
+    }
+
+    async function applyInertiaValue(value) {
+        await ROM_writeOBJ("6633", "0", value);
+        await ROM_writeOBJ("6637", "0", 1);
+        const el = document.getElementById("m6633s0");
+        if (el) el.value = value;
+        alert("Inertia set to " + value + " g\u00B7cm\u00B2 (0x6633) and parameter recalculation triggered.");
+    }
+
+    // ---- Network Config ----
+    let _netSelectedAdapter = null;
+    let _netSelectedSlave = 0;
+
+    function netRefreshAdapters() {
+        fetch(host + "api/adapters")
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) return;
+                const grid = byId("netAdapterGrid");
+                grid.innerHTML = "";
+                const ethIcon = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+                    '<rect x="2" y="7" width="20" height="10" rx="2"/>' +
+                    '<line x1="6" y1="12" x2="6" y2="12.01"/>' +
+                    '<line x1="10" y1="12" x2="10" y2="12.01"/>' +
+                    '<line x1="14" y1="12" x2="14" y2="12.01"/>' +
+                    '<line x1="18" y1="12" x2="18" y2="12.01"/>' +
+                    '<line x1="6" y1="7" x2="6" y2="4"/>' +
+                    '<line x1="18" y1="7" x2="18" y2="4"/></svg>';
+                (data.adapters || []).forEach(a => {
+                    const card = document.createElement("div");
+                    card.className = "net-adapter-card" + (a.name === data.current ? " selected" : "");
+                    card.dataset.name = a.name;
+                    card.innerHTML =
+                        '<div class="net-adapter-icon">' + ethIcon + '</div>' +
+                        '<div class="net-adapter-info">' +
+                        '<div class="net-adapter-name">' + a.desc + '</div>' +
+                        '<div class="net-adapter-path">' + a.name + '</div>' +
+                        '</div>';
+                    card.onclick = function() {
+                        grid.querySelectorAll(".net-adapter-card").forEach(c => c.classList.remove("selected"));
+                        card.classList.add("selected");
+                        _netSelectedAdapter = a.name;
+                    };
+                    grid.appendChild(card);
+                    if (a.name === data.current) _netSelectedAdapter = a.name;
+                });
+                if (_netSelectedAdapter == null && data.adapters.length) {
+                    _netSelectedAdapter = data.adapters[0].name;
+                    grid.querySelector(".net-adapter-card")?.classList.add("selected");
+                }
+                netUpdateStatus(data.connected);
+            })
+            .catch(() => {});
+    }
+
+    function netUpdateStatus(connected, device) {
+        const el = byId("netStatus");
+        const devEl = byId("netDevice");
+        if (connected) {
+            el.textContent = "Connected";
+            el.className = "test-status test-status--done";
+        } else {
+            el.textContent = "Disconnected";
+            el.className = "test-status test-status--error";
+        }
+        if (devEl && device) devEl.textContent = device;
+        else if (devEl && !connected) devEl.textContent = "";
+
+        var btnConn = byId("netBtnConnect");
+        if (btnConn) {
+            if (connected) {
+                btnConn.classList.add("btn--disabled");
+                btnConn.style.pointerEvents = "none";
+                btnConn.style.opacity = "0.4";
+            } else {
+                btnConn.classList.remove("btn--disabled");
+                btnConn.style.pointerEvents = "";
+                btnConn.style.opacity = "";
+            }
+        }
+
+        const allowedIds = ["network", "support"];
+        document.querySelectorAll(".menu li.item").forEach(li => {
+            if (allowedIds.includes(li.id)) return;
+            if (connected) {
+                li.classList.remove("nav-disabled");
+            } else {
+                li.classList.add("nav-disabled");
+            }
+        });
+
+        if (!connected) showContent("networkCont");
+    }
+
+    function netConnect() {
+        const el = byId("netStatus");
+        const adapter = _netSelectedAdapter;
+        const slave = _netSelectedSlave;
+        const cycleUs = parseFloat(byId("netCycle").value);
+        const cycle = cycleUs / 1000;
+        el.textContent = "Connecting...";
+        el.className = "test-status test-status--running";
+        byId("netDevice").textContent = "";
+
+        const params = new URLSearchParams({ adapter, slave, cycle });
+        fetch(host + "api/connect?" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    el.textContent = "Error: " + data.error;
+                    el.className = "test-status test-status--error";
+                } else {
+                    netUpdateStatus(true, data.device + " (HW " + data.hw + ", FW " + data.fw + ")");
+                    ROM_readOBJList(function() {
+                        updateFields();
+                        updateFieldsSwitch();
+                        updateDriveName();
+                        updateLiveFromObjects();
+                        connectTelemetryStream();
+                    });
+                }
+            })
+            .catch(err => {
+                el.textContent = "Failed: " + err;
+                el.className = "test-status test-status--error";
+            });
+    }
+
+    function netDisconnect() {
+        fetch(host + "api/disconnect")
+            .then(r => r.json())
+            .then(() => netUpdateStatus(false))
+            .catch(() => {});
+    }
+
+    var _discoveredSlaves = [];
+
+    function _pdoLabel(p) {
+        var lbl = p.pdo_index;
+        if (p.objects && p.objects.length) {
+            lbl += ": " + p.objects.map(function(o){
+                return o.index + ":" + o.subindex + " (" + o.bits + "b)";
+            }).join(", ");
+        }
+        return lbl;
+    }
+
+    function _pdoCheckboxes(slaveIdx, direction, availList, assignedList) {
+        if (!availList || !availList.length) return "";
+        var assignedSet = {};
+        (assignedList || []).forEach(function(p){ assignedSet[p.pdo_index] = true; });
+
+        var dirLabel = direction === "rx"
+            ? "RxPDO (Master \u2192 Slave)"
+            : "TxPDO (Slave \u2192 Master)";
+        var h = "<div style='font-size:10px;font-weight:600;color:var(--text-dim);margin-bottom:2px;margin-top:6px'>" + dirLabel + "</div>";
+        availList.forEach(function(p) {
+            var id = "pdoCb_" + slaveIdx + "_" + direction + "_" + p.pdo_index;
+            var checked = assignedSet[p.pdo_index] ? " checked" : "";
+            h += "<label style='display:flex;align-items:flex-start;gap:6px;padding:2px 0 2px 8px;font-size:11px;color:var(--text-faint);cursor:pointer'>" +
+                "<input type='checkbox' id='" + id + "'" + checked + " style='margin-top:2px'>" +
+                "<span>" + _pdoLabel(p) + "</span></label>";
+        });
+        return h;
+    }
+
+    function netSavePdoConfig() {
+        var payload = { slaves: {} };
+        _discoveredSlaves.forEach(function(s) {
+            var rx = [], tx = [];
+            (s.available_rx_pdo || []).forEach(function(p) {
+                var cb = byId("pdoCb_" + s.index + "_rx_" + p.pdo_index);
+                if (cb && cb.checked) rx.push(p.pdo_index);
+            });
+            (s.available_tx_pdo || []).forEach(function(p) {
+                var cb = byId("pdoCb_" + s.index + "_tx_" + p.pdo_index);
+                if (cb && cb.checked) tx.push(p.pdo_index);
+            });
+            payload.slaves[String(s.index)] = { rx_pdo: rx, tx_pdo: tx };
+        });
+
+        var statusEl = byId("netPdoSaveStatus");
+        if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Saving...</span>";
+
+        fetch(host + "api/pdo_config", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload)
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.error) {
+                if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>" + d.error + "</span>";
+            } else {
+                if (statusEl) statusEl.innerHTML = "<span style='color:var(--green)'>Saved. Reconnect to apply changes.</span>";
+            }
+        })
+        .catch(function(e){
+            if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Save failed: " + e + "</span>";
+        });
+    }
+
+    function _netSelectSlave(index) {
+        _netSelectedSlave = index;
+        var all = document.querySelectorAll(".net-disc-slave");
+        all.forEach(function(el) {
+            if (parseInt(el.dataset.slave) === index) {
+                el.classList.add("selected");
+            } else {
+                el.classList.remove("selected");
+            }
+        });
+    }
+
+    function netScanBus() {
+        const adapter = _netSelectedAdapter;
+        const statusEl = byId("netDiscoveryStatus");
+        const resultEl = byId("netDiscoveryResult");
+        statusEl.innerHTML = "<span style='color:var(--accent)'>Scanning...</span>";
+        resultEl.innerHTML = "";
+        _discoveredSlaves = [];
+
+        const params = adapter != null ? "?adapter=" + adapter : "";
+        fetch(host + "api/discover" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    statusEl.innerHTML = "<span style='color:#f55'>" + data.error + "</span>";
+                    return;
+                }
+                const slaves = data.slaves || [];
+                if (!slaves.length) {
+                    statusEl.innerHTML = "<span style='color:var(--text-dim)'>No slaves found on adapter " + data.adapter + ".</span>";
+                    return;
+                }
+                _discoveredSlaves = slaves;
+                if (_netSelectedSlave == null || _netSelectedSlave >= slaves.length) _netSelectedSlave = 0;
+                statusEl.innerHTML = "<span style='color:var(--accent)'>" + slaves.length + " slave(s) found &mdash; click a slave to select it for connection</span>";
+
+                let html = "";
+                slaves.forEach(s => {
+                    var rxCb = _pdoCheckboxes(s.index, "rx", s.available_rx_pdo, s.rx_pdo);
+                    var txCb = _pdoCheckboxes(s.index, "tx", s.available_tx_pdo, s.tx_pdo);
+                    var pdoHtml = "";
+                    if (rxCb || txCb) {
+                        pdoHtml = "<details onclick='event.stopPropagation()' style='margin-top:8px'>" +
+                            "<summary style='font-size:11px;color:var(--text-dim);cursor:pointer;user-select:none'>PDO Configuration</summary>" +
+                            "<div style='margin-top:6px'>" + rxCb + txCb + "</div>" +
+                            "</details>";
+                    }
+                    var sel = (s.index === _netSelectedSlave) ? " selected" : "";
+
+                    html +=
+                        "<div class='net-disc-slave" + sel + "' data-slave='" + s.index + "' onclick='_netSelectSlave(" + s.index + ")' style='padding:10px 14px;border-top:1px solid var(--border);cursor:pointer;transition:background 0.15s'>" +
+                        "<div style='display:flex;align-items:center;gap:10px'>" +
+                        "<div style='background:var(--bg-sidebar);border-radius:6px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--accent);font-size:15px'>" + s.index + "</div>" +
+                        "<div style='flex:1'>" +
+                        "<div style='font-weight:600;font-size:13px'>" + (s.device_name || s.name || "Slave " + s.index) + "</div>" +
+                        "<div style='font-size:11px;color:var(--text-dim)'>" +
+                        "Vendor " + s.vendor_id + " &middot; Product " + s.product_code + " &middot; Rev " + s.revision +
+                        (s.hw_version ? " &middot; HW " + s.hw_version : "") +
+                        (s.fw_version ? " &middot; FW " + s.fw_version : "") +
+                        "</div>" +
+                        "</div>" +
+                        "<div style='text-align:right;font-size:11px;color:var(--text-dim)'>" +
+                        "<span style='color:var(--accent);font-weight:600'>" + s.state + "</span><br>" +
+                        "In " + s.input_bytes + "B / Out " + s.output_bytes + "B" +
+                        "</div>" +
+                        "</div>" +
+                        pdoHtml +
+                        "</div>";
+                });
+                html += "<div style='padding:10px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:12px'>" +
+                    "<button class='btn btn--primary' onclick='netSavePdoConfig()' style='font-size:12px;padding:5px 16px'>Save PDO Config</button>" +
+                    "<span id='netPdoSaveStatus' style='font-size:11px'></span>" +
+                    "</div>";
+                resultEl.innerHTML = html;
+            })
+            .catch(err => {
+                statusEl.innerHTML = "<span style='color:#f55'>Scan failed: " + err + "</span>";
+            });
+    }
+
+    // poll connection status on page load
+    fetch(host + "api/connection")
+        .then(r => r.json())
+        .then(data => {
+            if (data.slave != null) _netSelectedSlave = data.slave;
+            if (data.cycle != null) byId("netCycle").value = Math.round(data.cycle * 1000);
+            netUpdateStatus(data.connected,
+                data.connected ? data.device + " (HW " + data.hw + ", FW " + data.fw + ")" : "");
+        })
+        .catch(() => {});
+
+    function runNetworkTest() {
+        const numSamples = byId("m83s0")?.value || 200;
+
+        const status = byId("networkTestStatus");
+        status.textContent = "Running...";
+        status.className = "test-status test-status--running";
+
+        const params = new URLSearchParams({ num_samples: numSamples });
+
+        fetch(host + "api/run_network_test?" + params)
+            .then(r => r.json())
+            .then(data => {
+                if (data.error) {
+                    status.textContent = "Error: " + data.error;
+                    status.className = "test-status test-status--error";
+                } else {
+                    status.textContent = "Done";
+                    status.className = "test-status test-status--done";
+                    plotNetworkResult(data);
+                }
+            })
+            .catch(err => {
+                status.textContent = "Failed: " + err;
+                status.className = "test-status test-status--error";
+            });
+    }
+
+    function plotNetworkResult(data) {
+        const cardStyle = "background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 16px;flex:1;min-width:120px;text-align:center";
+        const labelStyle = "font-size:10px;text-transform:uppercase;letter-spacing:0.8px;color:var(--text-faint)";
+        const valueStyle = "font-size:20px;font-weight:700;color:var(--text);margin-top:4px";
+        const fmt = (v, dp) => v != null ? v.toFixed(dp != null ? dp : 3) + " ms" : "\u2014";
+
+        const metricsEl = byId("networkTestMetrics");
+        if (metricsEl) {
+            metricsEl.innerHTML =
+                "<div style='display:flex;gap:16px;flex-wrap:wrap;padding:8px 0'>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Mean</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.mean_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Median</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.median_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Min</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.min_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Max</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.max_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Std Dev</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.std_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>P95</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.p95_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>P99</div>" +
+                "<div style='" + valueStyle + "'>" + fmt(data.p99_ms) + "</div></div>" +
+                "<div style='" + cardStyle + "'>" +
+                "<div style='" + labelStyle + "'>Errors</div>" +
+                "<div style='" + valueStyle + ";color:" + (data.errors > 0 ? "var(--danger)" : "var(--success)") + "'>" + (data.errors || 0) + "</div></div>" +
+                "</div>";
+        }
+
+        const samples = data.samples || [];
+        const darkAxis = { gridcolor: "#253347", zerolinecolor: "#253347", linecolor: "#253347" };
+        const plotCfg = { displayModeBar: false, responsive: true };
+
+        const traceHist = {
+            x: samples,
+            type: "histogram",
+            marker: { color: "rgba(59,130,246,0.7)", line: { color: "#3b82f6", width: 1 } },
+            nbinsx: Math.max(20, Math.round(samples.length / 5)),
+            name: "Latency"
+        };
+
+        const traceLine = {
+            x: samples.map((_, i) => i + 1),
+            y: samples,
+            type: "scatter",
+            mode: "lines",
+            line: { color: "#22c55e", width: 1.5 },
+            name: "Per-sample",
+            xaxis: "x2",
+            yaxis: "y2"
+        };
+
+        Plotly.newPlot(byId("networkTestPlot"), [traceHist, traceLine], {
+            paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "#111722",
+            font: { family: "Inter, system-ui, sans-serif", color: "#e2e8f0" },
+            hovermode: "x unified",
+            hoverlabel: { bgcolor: "#1a2233", bordercolor: "#253347", font: { color: "#e2e8f0", size: 12 } },
+            grid: { rows: 2, columns: 1, subplots: [["xy"], ["x2y2"]], roworder: "top to bottom" },
+            xaxis:  { title: "Latency (ms)", ...darkAxis, domain: [0, 1] },
+            yaxis:  { title: "Count", ...darkAxis },
+            xaxis2: { title: "Sample #", ...darkAxis, domain: [0, 1] },
+            yaxis2: { title: "Latency (ms)", ...darkAxis },
+            margin: { l: 60, r: 24, t: 30, b: 50 },
+            legend: { x: 0.02, y: 0.98, bgcolor: "rgba(0,0,0,0.3)", font: { color: "#e2e8f0" } },
+            shapes: [{
+                type: "line", xref: "x2", yref: "y2",
+                x0: 1, x1: samples.length,
+                y0: data.mean_ms, y1: data.mean_ms,
+                line: { color: "#f59e0b", width: 2, dash: "dash" }
+            }],
+            annotations: [{
+                xref: "x2", yref: "y2",
+                x: samples.length, y: data.mean_ms,
+                text: "mean " + data.mean_ms.toFixed(3) + " ms",
+                showarrow: false,
+                font: { color: "#f59e0b", size: 11 },
+                xanchor: "right", yanchor: "bottom"
+            }]
+        }, plotCfg);
+
+        byId("networkTestResult").style.display = "block";
+    }
+</script>
+
+<script>
+    // Graph functions
+    let grafIsZoomed = 0;
+    let graphCheckBoxChanged = false;
+    
+    const graphCheckboxIds = ["graf_check_position", "graf_check_speed", "graf_check_fid", "graf_check_fiq", "graf_check_phaseA", "graf_check_phaseB"];
+    const graphLabels = ["Position", "Speed", "Thermal", "Torque", "Phase A", "Phase B"];
+    const graphColors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"];
+    
+    // Plotly traces - each trace has x and y arrays
+    const traces = [
+        { name: "Position", x: [], y: [], mode: 'lines', line: { color: graphColors[0], width: 2 }, visible: true },
+        { name: "Speed", x: [], y: [], mode: 'lines', line: { color: graphColors[1], width: 2 }, visible: true },
+        { name: "Thermal", x: [], y: [], mode: 'lines', line: { color: graphColors[2], width: 2 }, visible: true },
+        { name: "Torque", x: [], y: [], mode: 'lines', line: { color: graphColors[3], width: 2 }, visible: true },
+        { name: "Phase A", x: [], y: [], mode: 'lines', line: { color: graphColors[4], width: 2 }, visible: true },
+        { name: "Phase B", x: [], y: [], mode: 'lines', line: { color: graphColors[5], width: 2 }, visible: true }
+    ];
+
+    // Plotly layout configuration
+    const layout = {
+        title: '',
+        height: 300,
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#ffffff' },
+        xaxis: {
+            title: 'Time (s)',
+            color: '#ffffff',
+            gridcolor: 'rgba(255, 255, 255, 0.1)',
+            zerolinecolor: 'rgba(255, 255, 255, 0.2)'
+        },
+        yaxis: {
+            title: 'Value',
+            color: '#ffffff',
+            gridcolor: 'rgba(255, 255, 255, 0.1)',
+            zerolinecolor: 'rgba(255, 255, 255, 0.2)'
+        },
+        margin: { t: 30, r: 20, b: 40, l: 60 },
+        legend: {
+            x: 1.05,
+            y: 1,
+            bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#ffffff' }
+        }
+    };
+
+    const config = {
+        responsive: true,
+        displayModeBar: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['toImage', 'sendDataToCloud']
+    };
+
+    // Initialize Plotly graph
+    Plotly.newPlot('div_g', traces, layout, config);
+
+    function toggleSeries(traceIdx) {
+        const update = { visible: traces[traceIdx].visible ? 'legendonly' : true };
+        traces[traceIdx].visible = !traces[traceIdx].visible;
+        Plotly.restyle('div_g', update, [traceIdx]);
+    }
+
+    // Detect zoom/relayout events
+    byId('div_g').on('plotly_relayout', function(eventdata) {
+        if (eventdata['xaxis.autorange'] || eventdata['yaxis.autorange']) {
+            grafIsZoomed = 0;
+            byId("graphControl").style.display = "none";
+        } else if (eventdata['xaxis.range[0]'] || eventdata['yaxis.range[0]']) {
+            grafIsZoomed = 1;
+            byId("graphControl").style.display = "block";
+        }
+    });
+
+</script>
+
+<script>
+    // get data from motor and show and hide content triggered from the menu
+    function checkStatus(response) {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+        }
+        return response;
+    }
+
+    // Tracks the system time with us resolution
+    let systeTime_s = 0,
+        timeOld = 0,
+        motorOverflowIndex = 0; // hold the system time in seconds with us resolution
+
+    function calculateSystemTime(time) {
+        if (Math.abs(time - timeOld) > 15)
+            motorOverflowIndex += (Math.pow(2, 32) / 120) * 1e-6;
+        systeTime_s = time + motorOverflowIndex;
+        timeOld = time;
+    }
+
+    // used to calc the current frame rate
+    let timeCalcDiffSum = 0, timeCalcIndex = 0;
+
+    const FRAME_SIZE = 80; // 20 x float32
+
+    function processTelemetryFrame(byteArray) {
+        let OLDsysteTime_s = systeTime_s;
+        calculateSystemTime(byteArray[0] * 1e-6);
+
+        timeCalcDiffSum += systeTime_s - OLDsysteTime_s;
+        if (++timeCalcIndex % 32 == 0) {
+            timeCalcDiffSum = 0;
+        }
+
+        function setVal(id, v) { let el = byId(id); if (el) el.innerHTML = v; }
+
+        setVal("m6064s0", byteArray[1].toFixed(1));
+        setVal("m606cs0", byteArray[2].toFixed());
+        setVal("m6077s0", byteArray[6].toFixed());
+        var _mode = byteArray[9] | 0;
+        setVal("m6061s0", (CIA402_MODE_NAMES[_mode] || "Unknown") + " (" + _mode + ")");
+        setVal("m2030s1", byteArray[8].toFixed(1));
+        setVal("m6079s0", byteArray[10].toFixed(1));
+        try {
+            var _sw = byteArray[15] | 0;
+            setVal("m6041s0", decodeCiA402State(_sw));
+            var _sbEl = document.getElementById("statusBits");
+            if (_sbEl) {
+                var _bh = "<div style='display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:11px;line-height:1.6'>";
+                for (var _bi = 0; _bi < _cia402Labels.length; _bi++) {
+                    if (!_cia402Labels[_bi]) continue;
+                    var _bon = (_sw >> _bi) & 1;
+                    _bh += "<span style='color:" + (_bon ? "#4ade80" : "#444") + "'>"
+                        + (_bon ? "\u25CF " : "\u25CB ") + _cia402Labels[_bi] + "</span>";
+                }
+                _bh += "</div>";
+                _sbEl.innerHTML = _bh;
+            }
+        } catch(e) { console.error("statusword:", e); }
+        var _din = byteArray[14] | 0;
+        var _sd1 = byId("side-din1"), _sd2 = byId("side-din2");
+        if (_sd1) _sd1.classList.toggle("on", !!(_din & 1));
+        if (_sd2) _sd2.classList.toggle("on", !!(_din & 2));
+        setVal("m6062s0", (byteArray[12] / 10).toFixed(2));
+        setVal("m606bs0", byteArray[11].toFixed(1));
+        setVal("m6071s0", byteArray[13].toFixed(0));
+        setVal("m603fs0", byteArray[7] | 0);
+
+        updateHomeGauges(byteArray);
+
+        if (grafIsZoomed) return;
+
+        const maxPoints = 100;
+        const newX = [systeTime_s];
+        const newData = [
+            [byteArray[1]], [byteArray[2]], [byteArray[5]],
+            [byteArray[6]], [byteArray[3]], [byteArray[4]]
+        ];
+        Plotly.extendTraces('div_g', {
+            x: [newX, newX, newX, newX, newX, newX],
+            y: newData
+        }, [0, 1, 2, 3, 4, 5], maxPoints);
+    }
+
+    async function connectTelemetryStream() {
+        try {
+            const response = await fetch(host + "api/telemetry-stream");
+            const reader = response.body.getReader();
+            let buffer = new Uint8Array(0);
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const combined = new Uint8Array(buffer.length + value.length);
+                combined.set(buffer);
+                combined.set(value, buffer.length);
+                buffer = combined;
+
+                while (buffer.length >= FRAME_SIZE) {
+                    const frame = buffer.slice(0, FRAME_SIZE);
+                    buffer = buffer.slice(FRAME_SIZE);
+                    const byteArray = new Float32Array(frame.buffer);
+                    processTelemetryFrame(byteArray);
+                }
+            }
+        } catch (e) {
+            console.warn("Telemetry stream disconnected:", e.message);
+        }
+        setTimeout(connectTelemetryStream, 1000);
+    }
+
+    function showContent(topic) {
+        const elements = ["homeCont_", "torqueCont_", "speedCont_", "posCont_", "sequencer_",  "motorCont", "controlCont", "maintCont", "networkCont", "supCont", "tuning_stepResponse_", "tuning_bodePlot_", "tuning_inertiaId_", "tuning_networkTest_"];
+
+        elements.forEach(elementId => {
+            const element = byId(elementId);
+            if (element) {
+                element.style.display = "none";
+                byId("graphContainer").style.display = "none";
+            }
+        });
+
+        if (topic && elements.includes(topic)) {
+            byId(topic).style.display = "block";
+            if (topic.includes("_") && !topic.startsWith("tuning_"))
+                byId("graphContainer").style.display = "block";
+        }
+
+        document.querySelectorAll(".smenu a.nav-active").forEach(a => a.classList.remove("nav-active"));
+        document.querySelectorAll(".menu .item.nav-active-parent").forEach(li => li.classList.remove("nav-active-parent"));
+        const clicked = document.querySelector(".smenu a[onclick*=\"'" + topic + "'\"]") ||
+                        document.querySelector(".menu .item > a[onclick*=\"'" + topic + "'\"]");
+        if (clicked) {
+            clicked.classList.add("nav-active");
+            const parentLi = clicked.closest("li.item");
+            if (parentLi) parentLi.classList.add("nav-active-parent");
+        }
+    }
+
+    // toggle the debug panel when user is pressing d key on the keyboard
+    this.addEventListener('keypress', event => {
+        if (event.keyCode == 100) { // when d is pressed
+            let dif = byId("debugValues").style;
+            dif.display = (dif.display == "none") ? "block" : "none";
+        }
+    })
+
+</script>
+
+
+<script>
+    // field generators
+
+    // placeholder for the update function that fills the fields with content later
+    let fieldstoUpdate = [];
+    let fieldstoUpdateIP = [];
+    let fieldstoUpdateMAC = [];
+    let fieldstoUpdateSwitch = [];
+    let objectsFromDrive = new Map();
+
+    // loads the views used in the control tabs like speed, position or torque control
+    function loadControlView(kind) {
+        byId("torqueCont_").innerHTML = "";
+        byId("speedCont_").innerHTML = "";
+        byId("posCont_").innerHTML = "";
+        byId("sequencer_").innerHTML = "";
+
+        switch (kind) {
+            case 'torqueCont_':
+                generateBoxTitle("torqueCont_", "Torque control", "Here the drive can be driven in troque mode.", "h1");
+                generateSwitch("torqueCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 128);
+                generateSlider("torqueCont_", "6071", "0", "Target torque", "mNm", 'Sets the torque to the drive', -600, 600);
+                break;
+
+            case 'speedCont_':
+                generateBoxTitle("speedCont_", "Speed control", "These are the Motor settings. These settings should not change since the electric motor of the servo drive is not replacable. Anyhow control values and the inertia could increase the drive performance.", "h1");
+                generateSwitch("speedCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 130);
+                generateSwitch("speedCont_", 99, 1, "Use Stepper mode", 'Uses a microstepping algorithm to achieve smooth motion, for example, in telescopes. However, this motion exhibits significantly reduced dynamic performance.', "", 134);
+
+                generateSlider("speedCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateSlider("speedCont_", "6081", "0", "Target speed", "°/s", 'Sets the target speed', -20000, 20000);
+                break;
+
+            case 'posCont_':
+                generateBoxTitle("posCont_", "Position control", "These are the Motor settings. These settings should not change since the electric motor of the servo drive is not replacable. Anyhow control values and the inertia could increase the drive performance.", "h1");
+                generateSwitch("posCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 133);
+                generateSlider("posCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateSlider("posCont_", "607a", "0", "Target Position", "deg", 'Sets thje target position', -1000, 1000);
+                generateSwitch("posCont_", 99, 1, "Use Path Planer", 'Enables the motor', 'pathPlanerDiv', 129);
+                generateSwitch("posCont_", 99, 2, "Use Stepper mode", 'Uses a microstepping algorithm to achieve smooth motion, for example, in telescopes. However, this motion exhibits significantly reduced dynamic performance.', "", 134);
+                generateSlider("posCont_", "6081", "0", "Profile Speed", "RPM", 'Sets thje target position', 0, 1000, '1');
+                generateSlider("posCont_", "6083", "0", "Profile Acceleration", "RPM/s", 'Sets thje target position', 0, 10000, 'pathPlanerDiv2');
+                generateSlider("posCont_", "6084", "0", "Profile Decceleration", "RPM/s", 'Sets thje target position', 0, 10000, 'pathPlanerDiv3');
+                break;
+
+            case 'sequencer_':
+                generateBoxTitle("sequencer_", "Sequencer", "Drive the motor in a sequence between two targets", "h1");
+                generateSwitch("sequencer_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 133);
+                generateSlider("sequencer_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateBoxContent("sequencer_", "82", "0", "Target Position A", -65536, 65536, "deg", 'Target position A for the sequence', "", "number", 90);
+                generateBoxContent("sequencer_", "82", "1", "Target Position B", -65536, 65536, "deg", 'Target position B for the sequence', "", "number", -90);
+                generateBoxContent("sequencer_", "82", "2", "Dwell Time", 100, 60000, "ms", 'Wait time at each position before moving to the next', "", "number", 1000);
+                generateSwitch("sequencer_", 99, 1, "Use Path Planer", 'Enables the motor', 'pathPlanerDiv', 129);
+                generateSlider("sequencer_", "6081", "0", "Profile Speed", "RPM", 'Sets the profile speed', 0, 1000, 'pathPlanerDiv1');
+                generateSlider("sequencer_", "6083", "0", "Profile Acceleration", "RPM/s", 'Sets the profile acceleration', 0, 10000, 'pathPlanerDiv2');
+                generateSlider("sequencer_", "6084", "0", "Profile Deceleration", "RPM/s", 'Sets the profile deceleration', 0, 10000, 'pathPlanerDiv3');
+                byId("sequencer_").innerHTML +=
+                    "<div class='box'><h2>Run Sequence</h2><div class='box_content'>" +
+                    "<a class='btn' id='seqStartBtn' onclick='toggleSequencer()'>Start Sequencing</a>" +
+                    "<span id='seqStatus' class='test-status'></span>" +
+                    "<p>Alternates between Position A and Position B with the configured dwell time.</p>" +
+                    "</div></div>";
+                break;
+        }
+
+        updateFieldsSwitch();
+    }
+
+    // Content for motor parameters
+    generateBoxTitle("motorCont", "Motor Values", "These are the Motor settings. The most settings here should not change since the electric motor of the servo drive is not replacable.", "h1");
+    generateBoxContent("motorCont", "driveName", "", "Drive Name", 1, 65536, '', 'This is the name of the Drive. The name is visible on the upper right side of the web GUI', "", "text");
+    generateBoxContent("motorCont", "6072", "0", "Maximum Current", 1, 65536, 'mA', 'This is the maximum current in A for the used Drive-system.');
+    generateBoxContent("motorCont", "6631", "0", "Motor Coil Resistance", 1, 65536, 'umOhmH', 'The DC-Coil resistance of one phase of the used motor');
+    generateBoxContent("motorCont", "6632", "0", "Motor Coil Inductance", 1, 65536, 'uH', 'The coil inductance of one motor phase measured at 1kHz');
+    generateBoxContent("motorCont", "6630", "0", "Motor Torque Constant", 1, 65536, 'mNm/A', 'The torque constant is a measure of the relationship between the current flowing through a motor and the amount of torque it produces.');
+    generateBoxContent("motorCont", "6634", "0", "Motor Damping", 1, 65536, 'uNm/(rad/s)', 'Damping factor for the motor model');
+    generateBoxContent("motorCont", "6635", "0", "Resonance Frequency", 1, 65536, 'Hz', 'Resonance frequency of the drive system');
+    generateBoxContent("motorCont", "6633", "0", "Rotor Inertia", 1, 65536, 'g\u00B7cm\u00B2', 'The mechanical rotor inertia of the servo drive without load');
+    generateBoxTitle("motorCont", "System values", "Here are the system configurations. These configurations will vary depending on the inertia the drive needs to handle.", "h2");
+
+    generateBoxContent("motorCont", "503b", "0", "Zero Position Offset", 0, 65536, '1/10 Deg', 'The mechanical offset of the motor shaft');
+    addSaveToEEprom("motorCont");
+
+    // Maintainance content
+    generateBoxTitle("maintCont", "Maintenance", "Here the drive can be driven in troque mode.", "h1");
+    byId("maintCont").innerHTML += "<div class='box'><h2>Motor Calibration</h2><div class='box_content'>" +
+        "<a href='#' class='btn' onclick='startCalibration(); return false;'>Start Calibration</a><br />" +
+        "<p>Runs the manufacturer calibration routine (mode&nbsp;-99). The motor will move during calibration.</p></div></div>";
+    generateButton("maintCont", "msss", "Upload new Firmware to Drive", "Firmware Update", "Uploads a new Firmware to the Motor. The motor will restart after the process. The process will only take about 15 seconds.");
+    generateButton("maintCont", "msss", "Upload Config to Drive", "Upload drive configuration file to servo drive", "Uploads a new Firmware to the Motor. The motor will restart after the process. The process will only take about 15 seconds.");
+    generateButton("maintCont", "msss", "Download Config from Drive", "Download drive configuration file to servo drive", "Uploads a new Firmware to the Motor. The motor will restart after the process. The process will only take about 15 seconds.");
+    byId("maintCont").innerHTML += "<div class='box'><h2>Reset Position to Zero</h2><div class='box_content'>" +
+        "<a href='#' class='btn' onclick='resetPositionToZero(); return false;'>Reset Position to zero</a><br />" +
+        "<p>Sets the current motor position as the new zero reference. The drive will briefly enter calibration mode.</p></div></div>";
+    generateButton("maintCont", "msss", "Factory reset", "Reset drive to factory settings", "Uploads a new Firmware to the Motor. The motor will restart after the process. The process will only take about 15 seconds.", "red");
+
+    // Network Config
+    generateBoxTitle("networkCont", "EtherCAT Configuration", "Select the Ethernet interface and connect to the motor drive over EtherCAT.", "h1");
+
+    byId("networkCont").innerHTML +=
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Connection</div>" +
+        "<div class='box'><h2>Status</h2><div class='box_content'>" +
+        "<span id='netStatus' class='test-status'>Checking...</span>" +
+        "<span id='netDevice' style='margin-left:12px;color:var(--text-dim);font-size:13px'></span>" +
+        "</div></div>" +
+        "</div>" +
+        "<div class='section-card'>" +
+        "<div class='section-card-title' style='display:flex;align-items:center;justify-content:space-between'>Ethernet Adapter <a onclick='netRefreshAdapters()' style='font-size:10px;font-weight:400;color:var(--text-faint);cursor:pointer;text-transform:none;letter-spacing:0'>&#x21bb; refresh</a></div>" +
+        "<div id='netAdapterGrid' class='net-adapter-grid'></div>" +
+        "</div>" +
+        "<div class='section-card'>" +
+        "<div class='section-card-title' style='display:flex;align-items:center;justify-content:space-between'>Bus Discovery <a class='btn btn--outline' onclick='netScanBus()' style='font-size:10px;padding:2px 10px;line-height:1.4'>Scan Bus</a></div>" +
+        "<div id='netDiscoveryStatus' style='padding:8px 14px;font-size:12px;color:var(--text-dim)'>Press <b>Scan Bus</b> to detect all EtherCAT slaves on the selected adapter. Disconnect first if connected.</div>" +
+        "<div id='netDiscoveryResult'></div>" +
+        "</div>" +
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Connect</div>" +
+        "<div class='box'><h2>Cycle Time</h2><div class='box_content'>" +
+        "<div class='textBox'><input type='number' id='netCycle' value='200' min='50' max='100000' step='10' />" +
+        "<h4>\u00B5s</h4></div>" +
+        "</div></div>" +
+        "<div class='box' style='border:none'><h2></h2><div class='box_content'>" +
+        "<a class='btn' id='netBtnConnect' onclick='netConnect()'>Connect</a> " +
+        "<a class='btn btn--outline' onclick='netDisconnect()' style='margin-left:8px'>Disconnect</a>" +
+        "</div></div>" +
+        "</div>";
+
+    netRefreshAdapters();
+
+    // Step Response tuning
+    generateBoxTitle("tuning_stepResponse_", "Step Response", "Measure the step response of the drive to evaluate settling time, overshoot and stability. Configure the parameters below, then press Start to record.", "h1");
+
+    byId("tuning_stepResponse_").innerHTML += "<div class='section-card' id='sr_test_config'><div class='section-card-title'>Test Configuration</div></div>";
+    generateBoxContent("sr_test_config", 80, 0, "Step Size", 1, 3600, "deg", "The position step amplitude applied to the drive", "", "number", 180);
+    generateBoxContent("sr_test_config", 80, 1, "Recording Time", 100, 30000, "ms", "Duration of the recording window after the step is applied", "", "number", 300);
+    generateBoxContent("sr_test_config", 80, 2, "Torque Limit", 1, 600, "mNm", "Maximum torque the drive may use during the step", "", "number", 300);
+
+    byId("tuning_stepResponse_").innerHTML += "<div class='section-card' id='sr_tuning'><div class='section-card-title'>Control Tuning</div></div>";
+    generateBoxContent("sr_tuning", 80, 3, "Current Bandwidth", 0, 2000, "Hz", "Control bandwidth of the current controller", "", "number", 800);
+    generateBoxContent("sr_tuning", 80, 5, "Position Bandwidth", 0, 200, "Hz", "Control bandwidth of the position controller", "", "number", 20);
+    generateBoxContent("sr_tuning", "6633", "0", "Rotor Inertia", 0, 65536, "g\u00B7cm\u00B2", "The mechanical rotor inertia of the servo drive without load");
+    generateBoxContent("sr_tuning", "6634", "0", "Motor Damping", 0, 65536, "uNm/(rad/s)", "Viscous damping factor for the motor model");
+    generateBoxContent("sr_tuning", "6620", "1", "Current Damping", 0, 140, "%", "The damping factor of the current controller");
+    generateBoxContent("sr_tuning", "6620", "3", "Position Damping", 0, 140, "%", "The damping factor of the position controller");
+
+    byId("tuning_stepResponse_").innerHTML +=
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Run</div>" +
+        "<div class='box' style='border:none'><h2>Measurement</h2><div class='box_content'>" +
+        "<a class='btn' onclick='runStepResponse()'>Start Step Response</a>" +
+        "<span id='stepResponseStatus' class='test-status'></span>" +
+        "<p>The drive will perform a position step and record position, speed and torque.</p>" +
+        "</div></div></div>" +
+        "<div id='stepResponseResult' style='display:none'>" +
+        "<div id='stepResponseMetrics' style='margin-bottom:12px'></div>" +
+        "<div id='stepResponsePlot' style='width:100%;height:420px'></div>" +
+        "</div>";
+
+    // Bode Plot tuning
+    generateBoxTitle("tuning_bodePlot_", "Bode Plot", "Sweep a sinusoidal excitation across a frequency range to measure the open-loop gain and phase of the drive system.", "h1");
+
+    byId("tuning_bodePlot_").innerHTML += "<div class='section-card' id='bp_test_config'><div class='section-card-title'>Sweep Configuration</div></div>";
+    generateBoxContent("bp_test_config", 81, 0, "Start Frequency", 1, 5000, "Hz", "The lowest excitation frequency of the sweep", "", "number", 5);
+    generateBoxContent("bp_test_config", 81, 1, "Stop Frequency", 1, 5000, "Hz", "The highest excitation frequency of the sweep", "", "number", 30);
+    generateBoxContent("bp_test_config", 81, 2, "Excitation Amplitude", 1, 360, "deg", "Peak position amplitude of the sinusoidal excitation signal in degree", "", "number", 100);
+
+    byId("tuning_bodePlot_").innerHTML += "<div class='section-card' id='bp_tuning'><div class='section-card-title'>Control Tuning</div></div>";
+    generateBoxContent("bp_tuning", 81, 3, "Current Bandwidth", 0, 2000, "Hz", "Control bandwidth of the current controller", "", "number", 1000);
+    generateBoxContent("bp_tuning", 81, 5, "Position Bandwidth", 0, 200, "Hz", "Control bandwidth of the position controller", "", "number", 30);
+    generateBoxContent("bp_tuning", "6633", "0", "Rotor Inertia", 0, 65536, "g\u00B7cm\u00B2", "The mechanical rotor inertia of the servo drive without load");
+    generateBoxContent("bp_tuning", "6634", "0", "Motor Damping", 0, 65536, "uNm/(rad/s)", "Viscous damping factor for the motor model");
+    generateBoxContent("bp_tuning", "6620", "1", "Current Damping", 0, 140, "%", "The damping factor of the current controller");
+    generateBoxContent("bp_tuning", "6620", "3", "Position Damping", 0, 140, "%", "The damping factor of the position controller");
+
+    byId("tuning_bodePlot_").innerHTML +=
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Run</div>" +
+        "<div class='box' style='border:none'><h2>Measurement</h2><div class='box_content'>" +
+        "<a class='btn' onclick='runBodePlot()'>Start Bode Plot</a>" +
+        "<span id='bodePlotStatus' class='test-status'></span>" +
+        "<p>The drive will sweep through the configured frequency range and record gain and phase data.</p>" +
+        "</div></div></div>" +
+        "<div id='bodePlotResult' style='display:none'>" +
+        "<div id='bodePlotMetrics' style='margin-bottom:12px'></div>" +
+        "<div id='bodePlotGain' style='width:100%;height:300px'></div>" +
+        "<div id='bodePlotPhase' style='width:100%;height:300px;margin-top:8px'></div>" +
+        "</div>";
+
+    // Inertia Identification
+    generateBoxTitle("tuning_inertiaId_", "Inertia Identification", "Apply a known torque step and measure angular acceleration to compute total rotational inertia (rotor + load). The result can be written back to the motor settings.", "h1");
+
+    byId("tuning_inertiaId_").innerHTML += "<div class='section-card' id='ii_test_config'><div class='section-card-title'>Test Configuration</div></div>";
+    generateBoxContent("ii_test_config", 82, 0, "Test Torque", 10, 600, "mNm", "Constant torque applied during the acceleration burst", "", "number", 200);
+    generateBoxContent("ii_test_config", 82, 1, "Recording Time", 100, 5000, "ms", "Duration of the torque step recording window", "", "number", 500);
+    generateBoxContent("ii_test_config", 82, 2, "Torque Limit", 10, 600, "mNm", "Maximum torque the drive may use", "", "number", 600);
+
+    byId("tuning_inertiaId_").innerHTML +=
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Run</div>" +
+        "<div class='box' style='border:none'><h2>Measurement</h2><div class='box_content'>" +
+        "<a class='btn' onclick='runInertiaTest()'>Start Inertia Test</a>" +
+        "<span id='inertiaTestStatus' class='test-status'></span>" +
+        "<p>The motor will accelerate under constant torque. Ensure the shaft can spin freely.</p>" +
+        "</div></div></div>" +
+        "<div id='inertiaTestResult' style='display:none'>" +
+        "<div id='inertiaTestMetrics' style='margin-bottom:12px'></div>" +
+        "<div id='inertiaTestPlot' style='width:100%;height:420px'></div>" +
+        "</div>";
+
+    // content for Network Test
+    generateBoxTitle("tuning_networkTest_", "Network Latency Test", "Measures EtherCAT SDO round-trip latency between host and drive. Performs many consecutive reads and reports timing statistics.", "h1");
+
+    byId("tuning_networkTest_").innerHTML += "<div class='section-card' id='nt_test_config'><div class='section-card-title'>Test Configuration</div></div>";
+    generateBoxContent("nt_test_config", 83, 0, "Number of Samples", 50, 20000, "", "How many SDO round-trip reads to perform", "", "number", 200);
+
+    byId("tuning_networkTest_").innerHTML +=
+        "<div class='section-card'>" +
+        "<div class='section-card-title'>Run</div>" +
+        "<div class='box' style='border:none'><h2>Measurement</h2><div class='box_content'>" +
+        "<a class='btn' onclick='runNetworkTest()'>Start Network Test</a>" +
+        "<span id='networkTestStatus' class='test-status'></span>" +
+        "<p>Reads the drive statusword repeatedly to measure communication latency. No motor movement required.</p>" +
+        "</div></div></div>" +
+        "<div id='networkTestResult' style='display:none'>" +
+        "<div id='networkTestMetrics' style='margin-bottom:12px'></div>" +
+        "<div id='networkTestPlot' style='width:100%;height:420px'></div>" +
+        "</div>";
+
+    // content for Control
+    generateBoxTitle("controlCont", "Control Values", "The control values of the drive can be adjusted to suit your application, these parameters will directly impact the performance of the drive.", "h1");
+    generateBoxContent("controlCont", "6660", "1", "Current proportional gain (P)", 1, 65536, "mV / A", "The proportional gain of the current control");
+    generateBoxContent("controlCont", "6660", "2", "Current integral gain (I)", 1, 165536, "V / ( A * s)", "The integrational gain of the current control");
+    generateBoxContent("controlCont", "6660", "3", "Current Kb", 1, 65536, "1/s", "The anti windup gain of the current control");
+    generateBoxContent("controlCont", "6645", "2", "Filter A/B", 0, 65536, "Hz", "The cut off frequency of the measured motor currents");
+    generateBoxContent("controlCont", "6645", "3", "Filter Q/D", 0, 65536, "Hz", "The cut off frequency of the park transfered motor currents inside the stationary reference frame");
+    generateBoxContent("controlCont", "6660", "4", "Speed proportional gain (P)", 1, 65536, "uA / RPM", "The proportional gain of the speed control");
+    generateBoxContent("controlCont", "6660", "5", "Speed integral gain (I)", 1, 65536, "mA / (RPM * s)", "The integrational gain of the speed control");
+    generateBoxContent("controlCont", "6645", "1", "Speed Filter", 1, 65536, "Hz", "The cutoff frequency of the speed signal");
+    generateBoxContent("controlCont", "6660", "6", "Position proportional gain (P)", 1, 65536, "mRPM / °", "The proportional gain of the position control");
+    generateBoxContent("controlCont", "6645", "4", "Demanded Position Prefilter", 1, 65536, "Hz", "The cut off frequency of the filter for the demanded position");
+    generateBoxContent("controlCont", "6645", "5", "Feed Forward Filter", 1, 65536, "Hz", "The feed forward frequency of the desired position");
+    generateBoxContent("controlCont", "607f", "0", "Speed limit", 1, 65536, "RPM", "The physical speed limit of the drive used in the speed and position control");
+
+    generateBoxTitle("controlCont", "Control Bandwidth", "Alternatively, you can set the control bandwidth here, which will automatically generate the corresponding control values above.", "h2");
+    generateBoxContent("controlCont", "6640", "1", "Current Bandwidth", 0, 1000, "Hz", "The control bandwidth of the current controller");
+    generateBoxContent("controlCont", "6640", "2", "Speed Bandwidth", 0, 500, "Hz", "The control bandwidth of the speed controller");
+    generateBoxContent("controlCont", "6640", "3", "Position Bandwidth", 0, 200, "Hz", "The control bandwidth of the position controller - a second indicator on the clock would need 1Hz");
+
+    generateBoxTitle("controlCont", "Damping factors", "Alternatively, you can set the damping of the control below. With this the control values above will get generated automatically.", "h2");
+    generateBoxContent("controlCont", "6620", "1", "Current Damping", 0, 140, "%", "The damping factor of the current controller");
+    generateBoxContent("controlCont", "6620", "2", "Speed Damping", 0, 140, "%", "The damping factor of the speed controller");
+    generateBoxContent("controlCont", "6620", "3", "Position Damping", 0, 140, "%", "The damping factor of the position controller");
+    generateBoxContent("controlCont", "6633", "0", "System Inertia", 0, 65536, 'g\u00B7cm\u00B2', 'The mechanical inertia of the system not including the inertia of the drive rotor');
+    generateBoxContent("controlCont", "6634", "0", "System Friction", 0, 65536, 'uNm/(rad/s)', 'The mechanical friction of the system');
+
+    byId("controlCont").innerHTML +=
+        "<div class='box'><h2>Apply</h2><div class='box_content'>" +
+        "<a class='btn' onclick='applyMotorSettings()'>Apply Motor Settings</a>" +
+        "<p>Triggers a parameter recalculation on the drive (writes 1 to 0x6637). Required after changing bandwidth, damping or inertia values.</p>" +
+        "</div></div>";
+
+    addSaveToEEprom("controlCont");
+
+    // Live content
+    generateLiveContent("actualLiveBig", "6064", "0", "Position", "Deg");
+    generateLiveContent("actualLiveBig", "606c", "0", "Speed", "RPM");
+    generateLiveContent("actualLiveBig", "6077", "0", "Torque", "mNm");
+
+    generateLiveContentTitle("demandedValuesLive", "Demanded Values");
+    generateLiveContent("demandedValuesLive", "6062", "0", "Position", "Deg");
+    generateLiveContent("demandedValuesLive", "606b", "0", "Speed", "RPM");
+    generateLiveContent("demandedValuesLive", "6071", "0", "Torque", "mNm");
+    generateLiveContent("demandedValuesLive", "6083", "0", "Path Accel.", "RPM/s");
+    generateLiveContent("demandedValuesLive", "6084", "0", "Path Decel.", "RPM/s");
+
+    generateLiveContentTitle("driveSystemLive", "Drive System");
+    byId("driveSystemLive").innerHTML +=
+        '<div class="live-row"><h2>Device</h2><h3><div id="m1008s0">\u2014</div></h3><h4></h4></div>';
+    generateLiveContent("driveSystemLive", "1009", "0", "HW Rev.", "");
+    generateLiveContent("driveSystemLive", "100a", "0", "Firmware", "");
+    generateLiveContent("driveSystemLive", "603f", "0", "Last error", "");
+    generateLiveContent("driveSystemLive", "6061", "0", "Motor mode", "");
+    generateLiveContent("driveSystemLive", "6041", "0", "Motor status", "");
+    generateLiveContent("driveSystemLive", "2030", "1", "Temperature", "°C");
+    generateLiveContent("driveSystemLive", "6079", "0", "Voltage", "V");
+    byId("driveSystemLive").innerHTML +=
+        "<div class='live-row'><h2>Digital In</h2>" +
+        "<div style='flex:1;display:flex;justify-content:right;gap:10px'>" +
+        "<span class='din-led din-led--sm' id='side-din1'><span class='din-dot'></span> 1</span>" +
+        "<span class='din-led din-led--sm' id='side-din2'><span class='din-dot'></span> 2</span>" +
+        "</div><h4></h4></div>";
+
+    // CiA 402 status bits (bottom of sidebar)
+    generateLiveContentTitle("cia402Live", "CiA 402 Status Bits");
+    byId("cia402Live").innerHTML += "<div id='statusBits' style='padding:4px 0'></div>";
+
+    // Debug view
+    for (var ii = 0; ii < 4; ++ii)
+        generateDebugValues("debugValuesList", "liveDebugValue" + ii);
+
+    let driveNameFromEEPROM = "";
+    async function updateDriveName() {
+        const textField = byId("mdriveNames");
+        try {
+            const text = await ROM_readName();
+            textField.value = text;
+            // also save the drive name stored in the eeprom for later chekcs if name has changed
+            driveNameFromEEPROM = text;
+
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    // change color of input field if content is different than original content from drive
+    function checkInputField(field) {
+        try {
+            // Parse ID: "m{index}s{subindex}"
+            const match = field.id.match(/^m(.+)s(.+)$/);
+            if (!match) throw "no match";
+            const index = match[1];
+            const subindex = match[2];
+
+            let stored = getObjValue(index, subindex);
+            if (stored !== undefined && field.value != stored) {
+                field.style.color = 'orange';
+                field.style.borderLeft = '4px solid orange';
+            }
+            else {
+                field.style.color = '';
+                field.style.borderLeft = '';
+            }
+        }
+        catch (error) {
+            console.log("no numbers found in input field " + field.id);
+            if (field.id == "mdriveNames") {
+                if (field.value != driveNameFromEEPROM) {
+                    field.style.color = 'orange';
+                    field.style.borderLeft = '4px solid orange';
+                }
+                else {
+                    field.style.color = 'black';
+                    field.style.borderLeft = '0px solid orange';
+                }
+            }
+        }
+    }
+
+    // field created, now update all the text and select fields the data from the motor
+    async function updateFields() {
+        const updated = new Set();
+        for (const [index, subindex] of fieldstoUpdate) {
+            const id = "m" + index + "s" + subindex;
+            if (updated.has(id)) continue;
+            updated.add(id);
+            try {
+                let val = getObjValue(index, subindex);
+                if (val === undefined) continue;
+                document.querySelectorAll('[id="' + id + '"]').forEach(el => el.value = val);
+            } catch (error) { console.error(error); }
+        }
+    }
+
+    // field created, now update all the switch fields with the data from the motor
+    async function updateFieldsSwitch() {
+        for (const [index, subindex, div] of fieldstoUpdateSwitch) {
+            const textField = byId("m" + index + "s" + subindex);
+            if (!textField) continue;
+            try {
+                let value = (String(index) === "99") ? 0 : getObjValue(index, subindex);
+                if (value === undefined) value = 0;
+                textField.checked = (value === 1);
+                checkboxChangeHandler(textField, div);
+            } catch (error) { console.error(error); }
+        }
+    }
+
+    const _liveObjIds = ["1008,0", "1009,0", "100a,0"];
+    function updateLiveFromObjects() {
+        for (const key of _liveObjIds) {
+            const val = objectsFromDrive.get(key);
+            if (val === undefined || val === "" || val === 0 || Number.isNaN(val)) continue;
+            const id = "m" + key.replace(",", "s");
+            const el = byId(id);
+            if (el) el.innerHTML = val;
+        }
+    }
+
+    // "_" before name means the negation, so the button works inverted
+    function checkboxChangeHandler(checkbox, div, data) {
+        const match = checkbox.id.match(/^m(.+)s(.+)$/);
+        if (!match) return;
+        const index = match[1];
+        const subindex = match[2];
+
+        // Write object if data is provided (e.g., mode enable switches)
+        if (data != null && data != "") {
+            const value = checkbox.checked ? data : 0;
+            if (index === "77")
+                ROM_writeTicket(value);
+            else
+                ROM_writeOBJ(index, subindex, value);
+        }
+
+        // Handle div visibility (if div is specified)
+        if (div) {
+            const inv = div.includes('_');
+            const show_hide = checkbox.checked !== inv ? "block" : "none";
+            document.querySelectorAll(`div[id^='${div}']`).forEach(inputField => inputField.style.display = show_hide);
+        }
+
+        // Stepper mode: adjust speed slider range
+        if (data == 134) {
+            const slider = byId("m6081s0");
+            const input  = byId("m6081s0_I");
+            if (slider) {
+                if (checkbox.checked) {
+                    slider._prevMin = slider.min;
+                    slider._prevMax = slider.max;
+                    slider.min = -1000;
+                    slider.max = 1000;
+                    if (input) { input.min = -1000; input.max = 1000; }
+                } else {
+                    slider.min = slider._prevMin || -20000;
+                    slider.max = slider._prevMax || 20000;
+                    if (input) { input.min = slider.min; input.max = slider.max; }
+                }
+            }
+        }
+    }
+
+    // generates a list of the difference between the motor EEPROM value and the WEB_GUI values
+    function checkDiff(chamngeList) {
+        let changeListReport = "<h2>The following objects have been changed:</h2><ul class='modalUL'>";
+        for (let ii = 0; ii < chamngeList.length; ++ii) {
+            [index, subindex, value] = chamngeList[ii];
+            let stored = getObjValue(index, subindex);
+            if (stored !== undefined && stored != value) {
+                let el = ROM_byId("m" + index + "s" + subindex);
+                let elName = el ? el.name : "";
+                changeListReport += "<li>" + elName + " (0x" + index + ":0x" + subindex + ") old:" + stored + " new:" + value + " <a style='color: blue;' href=# onClick=\"cancleDiffChange('" + index + "','" + subindex + "');\" >revert</a></li>";
+            }
+        }
+
+        // save drive name
+        const textField = byId("mdriveNames").value.trim();
+        if (driveNameFromEEPROM.trim() != textField) {
+            changeListReport += "<li>Drive name old: " + driveNameFromEEPROM + " new: " + textField;
+        }
+
+        changeListReport += "</ul>";
+
+        if (chamngeList.length == 0) {
+            changeListReport = "no changes found.";
+        }
+
+        ROM_byId("modalInfoWindowText").innerHTML = changeListReport;
+        const modal = ROM_byId("modalInfoWindow");
+        modal.showModal();
+
+        const modalButtons = ROM_byId("modalButtons");
+        modalButtons.innerHTML = "<div class='btn' onclick='saveToEEPROM_hot(0);'> save to seesion</div>";
+        modalButtons.innerHTML += "<div class='btn' onclick='saveToEEPROM_hot(1);'> save to EEPROM and restart</div>";
+        modalButtons.innerHTML += "<div class='btn' onclick='ROM_byId(\"modalInfoWindow\").close();'>close</div>";
+    }
+
+    function cancleDiffChange(index, subindex) {
+        let el = ROM_byId("m" + index + "s" + subindex);
+        let stored = getObjValue(index, subindex);
+        if (el && stored !== undefined) el.value = stored;
+        if (el) checkInputField(el);
+
+        ROM_byId("modalInfoWindow").close();
+        saveToEEPROM();
+    }
+
+    async function saveToEEPROM_hot(hot) {
+        ROM_writeOBJList(chamngeList);
+
+        if (hot === 1) {
+            ROM_sendXHRRequest("POST", host + "writeTicket", new Blob(["<system mode=\"4\" b=\"0\" c=\"0\" d=\"0\" />"], { type: "text/plain" }));
+        }
+
+        ROM_byId("modalInfoWindow").close();
+    }
+
+    let chamngeList = [];
+    async function saveToEEPROM() {
+        chamngeList.length = 0;
+        const seen = new Set();
+
+        for (const [index, subindex] of fieldstoUpdate) {
+            const key = index + "," + subindex;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const el = ROM_byId("m" + index + "s" + subindex);
+            if (!el) continue;
+            const textFieldValue = parseInt(el.value);
+            if (isNaN(textFieldValue)) continue;
+            let stored = getObjValue(index, subindex);
+            if (stored !== undefined && stored != textFieldValue)
+                chamngeList.push([index, subindex, textFieldValue]);
+        }
+
+        for (const [index, subindex] of fieldstoUpdateSwitch) {
+            const key = index + "," + subindex;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const el = ROM_byId("m" + index + "s" + subindex);
+            if (!el) continue;
+            const textFieldValue = el.checked;
+            let stored = getObjValue(index, subindex);
+            if (stored !== undefined && stored != Number(textFieldValue))
+                chamngeList.push([index, subindex, Number(textFieldValue)]);
+        }
+
+        checkDiff(chamngeList);
+    }
+
+    async function sliderInput(obj) {
+        const match = obj.id.match(/^m(.+)s(.+?)(_I)?$/);
+        if (!match) return;
+        await ROM_writeOBJ(match[1], match[2], obj.value)
+    }
+
+    function submitSliderText(inputEl) {
+        const sliderId = inputEl.id.replace(/_I$/, "");
+        const slider = document.getElementById(sliderId);
+        if (!slider) return;
+        slider.value = inputEl.value;
+        slider.setAttribute("value", inputEl.value);
+        requestAnimationFrame(() => sliderInput(slider));
+    }
+
+    if (UPDATE) {
+        // Read whole object list from drive. After that update the fields
+        ROM_readOBJList(function callback() {
+            updateFields();
+            updateFieldsSwitch();
+            updateDriveName();
+            updateLiveFromObjects();
+            connectTelemetryStream();
+            setInterval(() => ROM_readOBJList(() => { updateLiveFromObjects(); }), 10000);
+            UPDATE = false;
+        });
+    }
+
+</script>
+
+<script>
+    // validators
+    inputFields = document.querySelectorAll("input[type=number]");
+    inputFields.forEach(function (input) {
+        input.addEventListener("input", function () {
+            const minValue = input.min ? parseInt(input.min) : 0;
+            const maxValue = input.max ? parseInt(input.max) : 65535;
+            let enteredValue = parseInt(input.value);
+
+            if (enteredValue > maxValue) {
+                enteredValue = maxValue;
+                input.classList.add("blink");
+                setTimeout(function () {
+                    input.classList.remove("blink");
+                }, 1000);
+            } else if (enteredValue < minValue) {
+                enteredValue = minValue;
+                input.classList.add("blink");
+                setTimeout(function () {
+                    input.classList.remove("blink");
+                }, 1000);
+            } else {
+                input.classList.remove("blink");
+            }
+            input.value = enteredValue;
+        });
+    });
+
+    ipPattern = /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+    inputFields = document.querySelectorAll("input[name^='inputIP']");
+
+    inputFields.forEach(function (inputField) {
+        inputField.addEventListener("input", function () {
+            let value = inputField.value.trim().replace(/[^0-9.]/g, '');
+
+            // Count the number of dots
+            const dotCount = (value.match(/\./g) || []).length;
+
+            // Remove extra dot if there are already four dots
+            if (dotCount > 3) {
+                const lastIndex = value.lastIndexOf('.');
+                value = value.substring(0, lastIndex);
+            }
+
+            inputField.value = value;
+            let error = 0;
+
+            if (!ipPattern.test(value)) {
+                inputField.style.color = "gray";
+                let octets = value.split(".");
+
+                if (octets.length < 4 || octets[3].length === 0) {
+                    inputField.style.color = "gray";
+                    error = 1;
+                }
+
+                for (let i = 0; i < octets.length; i++) {
+                    let num = parseInt(octets[i]);
+                    if (num > 255) {
+                        inputField.style.color = "gray";
+
+                        // Add animation
+                        inputField.style.animation = "blink 1s infinite";
+                        num = 255;
+                        octets[i] = num.toString();
+                    }
+                }
+
+                value = octets.join(".");
+                inputField.value = value;
+
+                // Remove animation
+                setTimeout(() => {
+                    if (error === 0) {
+                        inputField.style.color = "black";
+                    }
+                    inputField.style.animation = "";
+                }, 500);
+            }
+            else
+                inputField.style.color = "black";
+        });
+    });
+</script>
+
+<script>
+    // updated all the text fields with the data from the motor
+    async function updateAllFields() {
+        const updated = new Set();
+        for (const [index, subindex] of fieldstoUpdate) {
+            const id = "m" + index + "s" + subindex;
+            if (updated.has(id)) continue;
+            updated.add(id);
+            let val = getObjValue(index, subindex);
+            if (val === undefined) continue;
+            document.querySelectorAll('[id="' + id + '"]').forEach(el => el.value = val);
+        }
+    }
+
+    // updated all the switch fields with the data from the motor
+    async function updateAllFieldsSwitch() {
+        for (const [index, subindex] of fieldstoUpdateSwitch) {
+            const textField = byId("m" + index + "s" + subindex);
+            if (!textField) continue;
+            let val = getObjValue(index, subindex);
+            textField.checked = (val === 1);
+        }
+    }
+
+    // get data from the motor and update all the fields
+    async function updateAllFieldsFromMotor() {
+        await ROM_readOBJList(function callback() {
+            updateAllFields();
+            updateAllFieldsSwitch();
+        });
+    }
+
+</script>
+
+</html>

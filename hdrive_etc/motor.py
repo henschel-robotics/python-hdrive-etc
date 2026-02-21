@@ -3,15 +3,18 @@ HDrive EtherCAT SDK — Main motor control class
 
 Provides :class:`HDriveETC`, the high-level API for controlling
 Henschel Robotics HDrive servo motors over EtherCAT (via PySOEM).
+
+Can be used standalone (creates its own bus internally) or attached
+to a shared :class:`EtherCATBus` for multi-slave setups.
 """
 
 import struct
 import threading
-import time
 
 import pysoem
 
-from .exceptions import ConfigurationError, ConnectionError, CommunicationError
+from .bus import EtherCATBus
+from .exceptions import ConnectionError, CommunicationError
 from .protocol import (
     configure_pdo_mapping,
     decode_rx_pdo,
@@ -90,50 +93,59 @@ class Error:
 class HDriveETC:
     """Control an HDrive servo motor over EtherCAT.
 
-    Two-thread architecture for optimal real-time performance:
+    **Standalone mode**: pass ``adapter`` (name/UID string) and
+    ``cycle_time_ms`` — a private :class:`EtherCATBus` is created
+    automatically.
 
-    1. **ProcessData thread** (5 ms cycle) — fast send/receive of raw
-       EtherCAT frames.  Minimal latency, no complex processing.
-    2. **PDO Update thread** (configurable *cycle_time_ms*) — decodes
-       received PDOs, runs the CiA 402 state machine, encodes TX PDOs
-       with user setpoints.
-
-    A third background thread monitors slave health and attempts
-    automatic recovery.
+    **Shared-bus mode**: pass a pre-created :class:`EtherCATBus` via the
+    *bus* parameter.  The motor registers itself with the bus and
+    participates in the shared PDO cycle.
 
     Args:
-        adapter_index: Network-adapter index (see :meth:`list_adapters`).
-        slave_index: EtherCAT slave index (usually ``0`` for a single motor).
-        cycle_time_ms: PDO update cycle time in milliseconds.
+        adapter: Network-adapter name/UID string (standalone mode).
+        slave_index: EtherCAT slave index (usually ``0``).
+        cycle_time_ms: PDO update cycle time in milliseconds (standalone).
+        bus: Optional :class:`EtherCATBus` to share with other slaves.
 
-    Example::
+    Example (standalone)::
 
-        with HDriveETC(adapter_index=0) as motor:
+        with HDriveETC(adapter=r"\\Device\\NPF_{...}") as motor:
             motor.set_mode(Mode.TORQUE)
             motor.set_torque(200)
             time.sleep(2)
             motor.stop()
+
+    Example (shared bus)::
+
+        bus = EtherCATBus(adapter=r"\\Device\\NPF_{...}", cycle_time_ms=1)
+        motor0 = HDriveETC(slave_index=0, bus=bus)
+        motor1 = HDriveETC(slave_index=1, bus=bus)
+        bus.open()
+        # ... control motor0 and motor1 ...
+        bus.close()
     """
 
-    def __init__(self, adapter_index=0, slave_index=0, cycle_time_ms=10):
-        self.adapter_index = adapter_index
+    def __init__(self, adapter=None, slave_index=0, cycle_time_ms=10,
+                 bus=None, pdo_config_path=None):
+        self.adapter = adapter
         self.slave_index = slave_index
         self.cycle_time = cycle_time_ms / 1000.0
+        self._pdo_config_path = pdo_config_path
 
         # EtherCAT receive timeout: 2x cycle time (microseconds)
         self.rx_timeout_us = int(cycle_time_ms * 2000)
 
+        # Bus reference
+        self._bus = bus
+        self._owns_bus = bus is None
+
+        # Legacy attributes for backward compat
         self.master = None
-        self._processdata_thread = None
-        self._pdo_thread = None
-        self._check_thread = None
-        self._pd_stop_event = None
-        self._pdo_stop_event = None
-        self._check_stop_event = None
+
         self._lock = threading.Lock()
         self._state = {}
 
-        # Communication statistics
+        # Communication statistics (used when bus is shared)
         self._comm_ok_count = 0
         self._comm_error_count = 0
         self._actual_wkc = 0
@@ -145,7 +157,7 @@ class HDriveETC:
         self._cycle_time_sum = 0.0
         self._last_cycle_time = None
 
-        # Auto-reconnect
+        # Auto-reconnect (only meaningful in standalone mode)
         self.auto_reconnect = True
         self._reconnecting = threading.Event()
 
@@ -156,6 +168,74 @@ class HDriveETC:
         self._target_mode = Mode.TORQUE
         self._target_debug_outputs = None
         self._manual_controlword = None
+
+        # PDO loop internal state
+        self._control_word = 0x0006
+
+        if bus is not None:
+            bus.register_slave(self)
+
+    # ------------------------------------------------------------------
+    # Slave-handle interface (called by EtherCATBus)
+    # ------------------------------------------------------------------
+
+    def configure(self, pysoem_slave, rx_pdo=None, tx_pdo=None):
+        """Called by the bus during config_init to set up PDO mapping."""
+        configure_pdo_mapping(pysoem_slave, rx_pdo=rx_pdo, tx_pdo=tx_pdo)
+
+    def seed_tx(self, pysoem_slave):
+        """Seed the TX output buffer with safe defaults."""
+        tx_init = encode_tx_pdo(0, 0, 0, Mode.TORQUE, 0x0006, None)
+        pysoem_slave.output = tx_init
+
+    def pdo_update(self, master, reconnecting):
+        """Called every PDO cycle by the bus to decode RX and encode TX."""
+        if reconnecting.is_set():
+            return
+
+        slave = master.slaves[self.slave_index]
+
+        rx_raw = bytes(slave.input)
+        rx = decode_rx_pdo(rx_raw)
+        if rx:
+            state = cia402_state_from_status(rx["status"])
+
+            if self._manual_controlword is not None:
+                self._control_word = self._manual_controlword
+            else:
+                self._control_word = next_control_word(state)
+
+            self._state.update(rx)
+            self._state["state_name"] = state
+
+        target_position = self._target_position
+        target_velocity = self._target_velocity
+        target_torque = self._target_torque
+        mode = self._target_mode
+        debug_outputs = self._target_debug_outputs
+
+        tx_raw = encode_tx_pdo(
+            target_position, target_velocity, target_torque,
+            mode, self._control_word, debug_outputs,
+        )
+        slave.output = tx_raw
+
+    def on_reconnect(self, master):
+        """Called by the bus after a successful reconnect."""
+        with self._lock:
+            self._target_mode = Mode.STOP
+            self._target_position = 0
+            self._target_velocity = 0
+            self._target_torque = 0
+            self._manual_controlword = 0x0006
+        print(f"[MOTOR {self.slave_index}] Reconnected — held in STOP")
+
+    def safe_stop(self):
+        """Zero setpoints; called by the bus before closing."""
+        with self._lock:
+            self._target_torque = 0
+            self._target_velocity = 0
+            self._target_mode = Mode.STOP
 
     # ------------------------------------------------------------------
     # Context manager
@@ -171,7 +251,9 @@ class HDriveETC:
 
     def __del__(self):
         try:
-            if self.master:
+            if self._owns_bus and self._bus:
+                self.disconnect()
+            elif self.master:
                 self.disconnect()
         except Exception:
             pass
@@ -196,88 +278,44 @@ class HDriveETC:
     def connect(self):
         """Open the EtherCAT connection and bring the motor to OP state.
 
+        In standalone mode, creates a private :class:`EtherCATBus` and
+        opens it.  In shared-bus mode this is a no-op (call
+        ``bus.open()`` instead).
+
         Raises:
             ConnectionError: If no adapters/slaves are found or the state
                 transition fails.
             ConfigurationError: If PDO mapping fails.
         """
-        adapters = pysoem.find_adapters()
-        if not adapters:
-            raise ConnectionError("No network adapters found")
+        if not self._owns_bus:
+            return
 
-        if self.adapter_index >= len(adapters):
-            raise ConnectionError(
-                f"Adapter index {self.adapter_index} out of range "
-                f"(0-{len(adapters) - 1})"
-            )
+        self._bus = EtherCATBus(
+            adapter=self.adapter,
+            cycle_time_ms=self.cycle_time * 1000,
+            pdo_config_path=self._pdo_config_path,
+        )
+        self._bus.auto_reconnect = self.auto_reconnect
+        self._bus.register_slave(self)
+        self._bus.open()
 
-        adapter = adapters[self.adapter_index]
-        print(f"Connecting to: {adapter.name}")
-
-        self.master = pysoem.Master()
-        self.master.open(adapter.name)
-        self.master.in_op = False
-        self.master.do_check_state = False
-
-        if self.master.config_init() <= 0:
-            raise ConnectionError("No EtherCAT slaves found")
-
-        print(f"Found {len(self.master.slaves)} EtherCAT slave(s)")
-
-        for slave in self.master.slaves:
-            slave.is_lost = False
-
-        # Configure PDO mapping
-        try:
-            configure_pdo_mapping(self.master.slaves[self.slave_index])
-        except Exception as exc:
-            raise ConfigurationError(f"PDO mapping failed: {exc}") from exc
-
-        self.master.config_map()
-
-        if self.master.state_check(pysoem.SAFEOP_STATE, 50000) != pysoem.SAFEOP_STATE:
-            raise ConnectionError("Failed to reach SAFE-OP state")
-        print("Reached SAFE-OP state")
-
-        # Start communication threads BEFORE requesting OP state
-        print("Starting communication threads...")
-        self._start_threads()
-
-        self.master.state = pysoem.OP_STATE
-        self.master.write_state()
-        print("Requested OP state transition...")
-
-        if self.master.state_check(pysoem.OP_STATE, 50000) != pysoem.OP_STATE:
-            self._pd_stop_event.set()
-            self._pdo_stop_event.set()
-            raise ConnectionError("Failed to reach OP state")
-
-        self.master.in_op = True
-        print("Reached OP state - motor ready")
+        # Expose master for backward compat (SDO access, etc.)
+        self.master = self._bus.master
 
     def disconnect(self):
-        """Stop the motor and close the EtherCAT connection."""
-        self._safe_stop()
+        """Stop the motor and close the EtherCAT connection.
 
-        if self.master:
-            self.master.in_op = False
-
-        for evt in (self._pd_stop_event, self._pdo_stop_event, self._check_stop_event):
-            if evt:
-                evt.set()
-
-        for thr in (self._processdata_thread, self._pdo_thread, self._check_thread):
-            if thr:
-                thr.join(timeout=2.0)
-
-        self._processdata_thread = None
-        self._pdo_thread = None
-        self._check_thread = None
-
-        if self.master:
-            self.master.close()
+        In shared-bus mode, only unregisters this slave from the bus.
+        """
+        if self._owns_bus and self._bus:
+            self._bus.close()
+            self._bus = None
             self.master = None
             print("Disconnected")
+        elif self._bus:
+            self.safe_stop()
+            self._bus.unregister_slave(self)
+            self.master = None
 
     # ------------------------------------------------------------------
     # Motor control API
@@ -408,44 +446,59 @@ class HDriveETC:
     def get_comm_stats(self):
         """Return communication and cycle-timing statistics.
 
+        In shared-bus mode the stats come from the bus.
+
         Returns:
             dict: Keys include ``ok_count``, ``error_count``,
             ``success_rate``, ``cycle_time_actual_ms``, etc.
         """
-        with self._lock:
-            total = self._comm_ok_count + self._comm_error_count
-            success_rate = (self._comm_ok_count / total * 100) if total > 0 else 0.0
+        bus = self._bus
+        if bus and not self._owns_bus:
+            ok = bus._comm_ok_count
+            err = bus._comm_error_count
+        else:
+            ok = bus._comm_ok_count if bus else self._comm_ok_count
+            err = bus._comm_error_count if bus else self._comm_error_count
 
-            cycle_avg = (
-                (self._cycle_time_sum / self._comm_ok_count) if self._comm_ok_count > 0 else 0.0
-            )
-            jitter = (
-                max(self._cycle_time_max - self.cycle_time, self.cycle_time - self._cycle_time_min)
-                if self._comm_ok_count > 0
-                else 0.0
-            )
+        total = ok + err
+        success_rate = (ok / total * 100) if total > 0 else 0.0
 
-            return {
-                "ok_count": self._comm_ok_count,
-                "error_count": self._comm_error_count,
-                "total_count": total,
-                "success_rate": success_rate,
-                "last_wkc": self._last_wkc,
-                "cycle_time_target_ms": self.cycle_time * 1000,
-                "cycle_time_actual_ms": (
-                    self._last_cycle_time * 1000 if self._last_cycle_time else 0.0
-                ),
-                "cycle_time_min_ms": (
-                    self._cycle_time_min * 1000 if self._cycle_time_min != float("inf") else 0.0
-                ),
-                "cycle_time_max_ms": self._cycle_time_max * 1000,
-                "cycle_time_avg_ms": cycle_avg * 1000,
-                "cycle_time_jitter_ms": jitter * 1000,
-            }
+        cycle_avg = (
+            (self._cycle_time_sum / ok) if ok > 0 else 0.0
+        )
+        jitter = (
+            max(self._cycle_time_max - self.cycle_time, self.cycle_time - self._cycle_time_min)
+            if ok > 0
+            else 0.0
+        )
+
+        return {
+            "ok_count": ok,
+            "error_count": err,
+            "total_count": total,
+            "success_rate": success_rate,
+            "last_wkc": self._last_wkc,
+            "cycle_time_target_ms": self.cycle_time * 1000,
+            "cycle_time_actual_ms": (
+                self._last_cycle_time * 1000 if self._last_cycle_time else 0.0
+            ),
+            "cycle_time_min_ms": (
+                self._cycle_time_min * 1000 if self._cycle_time_min != float("inf") else 0.0
+            ),
+            "cycle_time_max_ms": self._cycle_time_max * 1000,
+            "cycle_time_avg_ms": cycle_avg * 1000,
+            "cycle_time_jitter_ms": jitter * 1000,
+        }
 
     # ------------------------------------------------------------------
     # SDO read / write
     # ------------------------------------------------------------------
+
+    def _get_master(self):
+        """Return the active pysoem master, preferring the bus."""
+        if self._bus and self._bus.master:
+            return self._bus.master
+        return self.master
 
     def read_sdo(self, index, subindex, data_type=None):
         """Read an SDO object from the drive.
@@ -461,10 +514,11 @@ class HDriveETC:
         Returns:
             The unpacked value, or ``None`` on error.
         """
-        if not self.master:
+        master = self._get_master()
+        if not master:
             raise CommunicationError("Not connected")
         try:
-            slave = self.master.slaves[self.slave_index]
+            slave = master.slaves[self.slave_index]
             if data_type is not None:
                 size = struct.calcsize(f"<{data_type}")
                 data_bytes = slave.sdo_read(index, subindex, size)
@@ -497,9 +551,10 @@ class HDriveETC:
             value: Integer value to write.
             data_type: Optional :mod:`struct` format character.
         """
-        if not self.master:
+        master = self._get_master()
+        if not master:
             raise CommunicationError("Not connected")
-        slave = self.master.slaves[self.slave_index]
+        slave = master.slaves[self.slave_index]
         val = int(value)
         if data_type is not None:
             slave.sdo_write(index, subindex, struct.pack(f"<{data_type}", val))
@@ -525,10 +580,11 @@ class HDriveETC:
         Returns:
             int: Error code (0 = no error), or ``None`` on failure.
         """
-        if not self.master:
+        master = self._get_master()
+        if not master:
             return None
         try:
-            slave = self.master.slaves[self.slave_index]
+            slave = master.slaves[self.slave_index]
             raw = slave.sdo_read(0x603F, 0x00, 2)
             if raw and len(raw) >= 2:
                 return struct.unpack("<H", raw)[0]
@@ -553,10 +609,11 @@ class HDriveETC:
         Returns:
             bool: ``True`` on success.
         """
-        if not self.master:
+        master = self._get_master()
+        if not master:
             return False
         try:
-            slave = self.master.slaves[self.slave_index]
+            slave = master.slaves[self.slave_index]
             slave.sdo_write(0x6637, 0x00, struct.pack("<b", 100))
             return True
         except Exception as exc:
@@ -608,9 +665,10 @@ class HDriveETC:
 
     def trigger_parameter_calculation(self):
         """Trigger firmware parameter recalculation (0x6637 = 1)."""
-        if not self.master:
+        master = self._get_master()
+        if not master:
             raise CommunicationError("Not connected")
-        slave = self.master.slaves[self.slave_index]
+        slave = master.slaves[self.slave_index]
         slave.sdo_write(0x6637, 0x00, struct.pack("<B", 1))
 
     def configure_control_parameters(
@@ -630,304 +688,3 @@ class HDriveETC:
         self.set_control_bandwidth(torque_bw, velocity_bw, position_bw)
         self.trigger_parameter_calculation()
         print("Control parameters configured and calculation triggered")
-
-    # ------------------------------------------------------------------
-    # Internal: threads
-    # ------------------------------------------------------------------
-
-    def _attempt_reconnect(self):
-        """Tear down the master and rebuild the connection from scratch.
-
-        Called by ``_check_loop`` when sustained communication loss is
-        detected.  The ``_reconnecting`` event pauses the processdata
-        and PDO threads while the master is being rebuilt.
-        """
-        self._reconnecting.set()
-        self.master.in_op = False
-        print("[RECONNECT] Connection lost — attempting reconnect ...")
-
-        # Give processdata / PDO loops time to see the flag and pause
-        time.sleep(0.1)
-
-        try:
-            self.master.close()
-        except Exception:
-            pass
-
-        backoff = 1.0
-        while not self._check_stop_event.is_set():
-            try:
-                adapters = pysoem.find_adapters()
-                if self.adapter_index >= len(adapters):
-                    raise CommunicationError("Adapter not found")
-
-                adapter = adapters[self.adapter_index]
-                self.master = pysoem.Master()
-                self.master.open(adapter.name)
-                self.master.in_op = False
-                self.master.do_check_state = False
-
-                if self.master.config_init() <= 0:
-                    raise CommunicationError("No EtherCAT slaves found")
-
-                for slave in self.master.slaves:
-                    slave.is_lost = False
-
-                configure_pdo_mapping(self.master.slaves[self.slave_index])
-                self.master.config_map()
-
-                if self.master.state_check(
-                    pysoem.SAFEOP_STATE, 50000
-                ) != pysoem.SAFEOP_STATE:
-                    raise CommunicationError("Failed to reach SAFE-OP")
-
-                tx_init = encode_tx_pdo(0, 0, 0, Mode.TORQUE, 0x0006, None)
-                self.master.slaves[self.slave_index].output = tx_init
-
-                self.master.state = pysoem.OP_STATE
-                self.master.write_state()
-
-                # Pump processdata while waiting for OP transition
-                deadline = time.time() + 5.0
-                reached_op = False
-                while time.time() < deadline:
-                    self.master.send_processdata()
-                    self.master.receive_processdata(self.rx_timeout_us)
-                    if self.master.state_check(
-                        pysoem.OP_STATE, 1000
-                    ) == pysoem.OP_STATE:
-                        reached_op = True
-                        break
-                    time.sleep(0.005)
-
-                if not reached_op:
-                    raise CommunicationError("Failed to reach OP")
-
-                self.master.in_op = True
-                self._comm_error_count = 0
-                with self._lock:
-                    self._target_mode = Mode.STOP
-                    self._target_position = 0
-                    self._target_velocity = 0
-                    self._target_torque = 0
-                    self._manual_controlword = 0x0006
-                self._reconnecting.clear()
-                print("[RECONNECT] Successfully reconnected — motor held in STOP")
-                return
-
-            except Exception as exc:
-                print(f"[RECONNECT] Attempt failed: {exc}  — retrying in {backoff:.0f}s")
-                try:
-                    self.master.close()
-                except Exception:
-                    pass
-                self.master = None
-                self._check_stop_event.wait(backoff)
-                backoff = min(backoff * 2, 10.0)
-
-    def _safe_stop(self):
-        """Zero setpoints and wait for the state machine to leave OP."""
-        try:
-            if hasattr(self, "_lock") and self._lock:
-                with self._lock:
-                    self._target_torque = 0
-                    self._target_velocity = 0
-                    self._target_mode = Mode.STOP
-
-            threads_alive = any(
-                t and t.is_alive()
-                for t in (self._processdata_thread, self._pdo_thread)
-            )
-
-            if threads_alive:
-                deadline = time.time() + 1.0
-                while time.time() < deadline:
-                    try:
-                        if self.get_state_name() != "operation_enabled":
-                            return
-                    except Exception:
-                        break
-                    time.sleep(self.cycle_time if hasattr(self, "cycle_time") else 0.01)
-
-                if hasattr(self, "cycle_time"):
-                    time.sleep(self.cycle_time * 100)
-        except Exception:
-            pass
-
-    def _start_threads(self):
-        """Launch processdata, PDO-update, and state-check threads."""
-        # Seed output buffer
-        tx_init = encode_tx_pdo(0, 0, 0, Mode.TORQUE, 0x0006, None)
-        self.master.slaves[self.slave_index].output = tx_init
-        print(f"Initialized TX buffer: {len(tx_init)} bytes")
-
-        # Thread 1 — fast processdata (5 ms)
-        self._pd_stop_event = threading.Event()
-        self._processdata_thread = threading.Thread(
-            target=self._processdata_loop, name="HDrive-ProcessData", daemon=False
-        )
-        self._processdata_thread.start()
-        print("ProcessData thread started (5 ms cycle)")
-
-        # Thread 2 — PDO update (cycle_time)
-        self._pdo_stop_event = threading.Event()
-        self._pdo_thread = threading.Thread(
-            target=self._pdo_update_loop, name="HDrive-PDOUpdate", daemon=False
-        )
-        self._pdo_thread.start()
-        print(f"PDO Update thread started ({self.cycle_time * 1000:.1f} ms cycle)")
-
-        # Thread 3 — state check (10 ms)
-        self._check_stop_event = threading.Event()
-        self._check_thread = threading.Thread(
-            target=self._check_loop, name="HDrive-StateCheck", daemon=False
-        )
-        self._check_thread.start()
-        print("State check thread started (10 ms cycle)")
-
-    def _processdata_loop(self):
-        """Fast send/receive — 5 ms cycle.  No locks, no processing."""
-        while not self._pd_stop_event.is_set():
-            if self._reconnecting.is_set():
-                time.sleep(0.05)
-                continue
-            try:
-                self.master.send_processdata()
-                self._actual_wkc = self.master.receive_processdata(10000)
-
-                if self._actual_wkc != self.master.expected_wkc:
-                    self._comm_error_count += 1
-                    if self.master.in_op:
-                        self.master.do_check_state = True
-                else:
-                    self._comm_ok_count += 1
-            except Exception:
-                self._comm_error_count += 1
-
-            time.sleep(0.001)
-
-    def _pdo_update_loop(self):
-        """Decode RX, run state machine, encode TX — cycle_time."""
-        control_word = 0x0006
-        pdo_cycle_count = 0
-        _last_reported_errors = 0
-
-        while not self._pdo_stop_event.is_set():
-            if self._reconnecting.is_set():
-                time.sleep(0.05)
-                continue
-            try:
-                pdo_cycle_count += 1
-
-                if pdo_cycle_count % 20 == 0 and self._comm_error_count > _last_reported_errors:
-                    _last_reported_errors = self._comm_error_count
-                    print(f"[PDO {pdo_cycle_count}] Comm errors: {self._comm_error_count}")
-
-                rx_raw = bytes(self.master.slaves[self.slave_index].input)
-                rx = decode_rx_pdo(rx_raw)
-                if rx:
-                    state = cia402_state_from_status(rx["status"])
-
-                    if self._manual_controlword is not None:
-                        control_word = self._manual_controlword
-                    else:
-                        control_word = next_control_word(state)
-
-                    self._state.update(rx)
-                    self._state["state_name"] = state
-                    self._last_wkc = self._comm_ok_count
-
-                target_position = self._target_position
-                target_velocity = self._target_velocity
-                target_torque = self._target_torque
-                mode = self._target_mode
-                debug_outputs = self._target_debug_outputs
-
-                tx_raw = encode_tx_pdo(
-                    target_position, target_velocity, target_torque,
-                    mode, control_word, debug_outputs,
-                )
-                self.master.slaves[self.slave_index].output = tx_raw
-            except Exception:
-                pass
-
-            time.sleep(self.cycle_time)
-
-    def _check_loop(self):
-        """Monitor slave health and attempt recovery — 10 ms cycle."""
-        _consecutive_lost = 0
-        _RECONNECT_THRESHOLD = 200  # ~2 seconds of sustained failure
-
-        while not self._check_stop_event.is_set():
-            if self._reconnecting.is_set():
-                _consecutive_lost = 0
-                time.sleep(0.1)
-                continue
-
-            try:
-                if self.master and self.master.in_op and (
-                    (self._actual_wkc < self.master.expected_wkc)
-                    or self.master.do_check_state
-                ):
-                    self.master.do_check_state = False
-                    self.master.read_state()
-
-                    all_ok = True
-                    for i, slave in enumerate(self.master.slaves):
-                        if slave.state != pysoem.OP_STATE:
-                            all_ok = False
-                            self.master.do_check_state = True
-                            self._recover_slave(slave, i)
-
-                    if not self.master.do_check_state:
-                        _consecutive_lost = 0
-                        print("[STATE CHECK] All slaves resumed OPERATIONAL")
-                    elif not all_ok:
-                        _consecutive_lost += 1
-                else:
-                    _consecutive_lost = 0
-
-            except Exception:
-                _consecutive_lost += 1
-
-            if (
-                _consecutive_lost >= _RECONNECT_THRESHOLD
-                and self.auto_reconnect
-                and not self._reconnecting.is_set()
-            ):
-                print(f"[STATE CHECK] Lost contact for "
-                      f"{_consecutive_lost * 0.01:.1f}s — triggering reconnect")
-                _consecutive_lost = 0
-                self._attempt_reconnect()
-
-            time.sleep(0.01)
-
-    @staticmethod
-    def _recover_slave(slave, pos):
-        """Attempt to recover a slave that left OP state."""
-        if slave.state == (pysoem.SAFEOP_STATE + pysoem.STATE_ERROR):
-            print(f"[STATE CHECK] Slave {pos} is in SAFE_OP + ERROR, attempting ack...")
-            slave.state = pysoem.SAFEOP_STATE + pysoem.STATE_ACK
-            slave.write_state()
-        elif slave.state == pysoem.SAFEOP_STATE:
-            print(f"[STATE CHECK] Slave {pos} is in SAFE_OP, changing to OPERATIONAL...")
-            slave.state = pysoem.OP_STATE
-            slave.write_state()
-        elif slave.state > pysoem.NONE_STATE:
-            if slave.reconfig():
-                slave.is_lost = False
-                print(f"[STATE CHECK] Slave {pos} reconfigured")
-        elif not slave.is_lost:
-            slave.state_check(pysoem.OP_STATE)
-            if slave.state == pysoem.NONE_STATE:
-                slave.is_lost = True
-                print(f"[STATE CHECK] ERROR: Slave {pos} lost!")
-
-        if slave.is_lost:
-            if slave.state == pysoem.NONE_STATE:
-                if slave.recover():
-                    slave.is_lost = False
-                    print(f"[STATE CHECK] Slave {pos} recovered!")
-            else:
-                slave.is_lost = False
-                print(f"[STATE CHECK] Slave {pos} found")

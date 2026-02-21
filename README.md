@@ -38,7 +38,7 @@ pip install -e ".[dev]"
 from hdrive_etc import HDriveETC, Mode
 import time
 
-with HDriveETC(adapter_index=0) as motor:
+with HDriveETC(adapter=r"\Device\NPF_{...}") as motor:
     # Wait for motor to be ready
     while motor.get_state_name() != "operation_enabled":
         time.sleep(0.1)
@@ -64,11 +64,11 @@ with HDriveETC(adapter_index=0) as motor:
 ```python
 from hdrive_etc import HDriveETC
 
-# Find your network adapter index
+# Find your network adapter name
 HDriveETC.list_adapters()
 
 # Recommended: use a context manager (auto-connect and auto-disconnect)
-with HDriveETC(adapter_index=0) as motor:
+with HDriveETC(adapter=r"\Device\NPF_{...}") as motor:
     motor.set_torque(200)
 
 # Motor is stopped and connection is closed automatically.

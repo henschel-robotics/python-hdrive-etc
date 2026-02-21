@@ -1,14 +1,23 @@
 """
 HDrive EtherCAT SDK — CiA 402 protocol and PDO encoding/decoding
 
-This module contains all low-level EtherCAT / CiA 402 protocol logic:
-- PDO mapping configuration
-- TX/RX PDO encoding and decoding
+This module contains HDrive-specific protocol logic:
+- HDrive error codes
+- TX/RX PDO encoding and decoding (HDrive frame layout)
 - CiA 402 state machine
-- Error code definitions
+
+Generic PDO mapping functions (configure_pdo_mapping, load_pdo_config,
+get_slave_pdo) are re-exported from ``ethercat_master`` for backward
+compatibility.
 """
 
 import struct
+
+from ethercat_master.pdo import (  # noqa: F401
+    load_pdo_config,
+    get_slave_pdo,
+    configure_pdo_mapping,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -62,39 +71,9 @@ def error_message(code):
     return ERROR_CODES.get(code, f"Unknown error code: {code}")
 
 
-# ---------------------------------------------------------------------------
-# PDO mapping
-# ---------------------------------------------------------------------------
-
-def configure_pdo_mapping(slave):
-    """Write SDO objects to configure PDO mapping on *slave*.
-
-    Mapping layout:
-        - 0x1600 (RxPDO): Motor control  — 16 bytes
-        - 0x1605 (RxPDO): Debug outputs   — 32 bytes  (8x INT32, 0x6710-0x6717)
-        - 0x1A00 (TxPDO): Motor status    — 18 bytes
-        - 0x1A05 (TxPDO): Debug values    — 64 bytes  (16x REAL32, 0x6700-0x670F)
-    """
-
-    def _write_u8(index, subindex, value):
-        slave.sdo_write(index, subindex, struct.pack("<B", value))
-
-    def _write_u16(index, subindex, value):
-        slave.sdo_write(index, subindex, struct.pack("<H", value))
-
-    # Clear PDO assignments
-    _write_u8(0x1C12, 0x00, 0)   # clear SM2 (RxPDO)
-    _write_u8(0x1C13, 0x00, 0)   # clear SM3 (TxPDO)
-
-    # Configure RxPDO (master -> slave)
-    _write_u16(0x1C12, 0x01, 0x1600)  # Motor control
-    _write_u16(0x1C12, 0x02, 0x1605)  # Debug outputs
-    _write_u8(0x1C12, 0x00, 2)        # Enable 2 PDOs
-
-    # Configure TxPDO (slave -> master)
-    _write_u16(0x1C13, 0x01, 0x1A00)  # Motor status
-    _write_u16(0x1C13, 0x02, 0x1A05)  # Debug values
-    _write_u8(0x1C13, 0x00, 2)        # Enable 2 PDOs
+# HDrive default PDO indices (includes debug channels)
+DEFAULT_RX_PDO = [0x1600, 0x1605]
+DEFAULT_TX_PDO = [0x1A00, 0x1A05]
 
 
 # ---------------------------------------------------------------------------

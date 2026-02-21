@@ -31,7 +31,12 @@ classifiers = [
 ]
 dependencies = [
     "pysoem>=1.1.0",
+    "ethercat-master>=0.1.0",
+    "numpy",
 ]
+
+[project.scripts]
+hdrive-web = "hdrive_etc.webserver:main"
 
 [project.urls]
 Homepage = "https://henschel-robotics.ch"
@@ -43,10 +48,18 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
+    "matplotlib",
+    "scipy",
 ]
 
 [tool.setuptools.packages.find]
 include = ["hdrive_etc*"]
+
+[tool.setuptools.package-data]
+hdrive_etc = [
+    "webgui/**/*",
+    "test_scripts/*.py",
+]
 
 [tool.ruff]
 target-version = "py38"

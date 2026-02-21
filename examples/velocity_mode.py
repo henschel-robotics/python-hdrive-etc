@@ -13,7 +13,7 @@ import time
 
 
 def main():
-    with HDriveETC(adapter_index=0) as motor:
+    with HDriveETC(adapter=None) as motor:
 
         # Wait until motor is ready
         for _ in range(50):

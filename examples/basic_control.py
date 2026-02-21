@@ -8,7 +8,7 @@ Usage:
     python basic_control.py
 
 Note:
-    Run ``HDriveETC.list_adapters()`` first to find the correct adapter_index
+    Run ``HDriveETC.list_adapters()`` first to find the correct adapter name
     for your system.
 """
 
@@ -17,11 +17,11 @@ import time
 
 
 def main():
-    # ---- find the right adapter index ----
+    # ---- find the right adapter name ----
     HDriveETC.list_adapters()
 
     # ---- connect and control ----
-    with HDriveETC(adapter_index=6) as motor:
+    with HDriveETC(adapter=None) as motor:
 
         # Wait for the CiA 402 state machine to reach "operation_enabled"
         print("Waiting for motor to become ready...")
