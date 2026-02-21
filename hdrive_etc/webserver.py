@@ -41,7 +41,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _PKG_DIR = Path(__file__).parent.resolve()
-_CONFIG_FILE = _PKG_DIR / "net_config.txt"
 _WEBGUI_DIR = _PKG_DIR / "webgui"
 _TEST_SCRIPTS_DIR = _PKG_DIR / "test_scripts"
 _RESULTS_DIR = _WEBGUI_DIR / "results"
@@ -49,36 +48,8 @@ _RESULTS_DIR = _WEBGUI_DIR / "results"
 _RESULTS_DIR.mkdir(exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Network config persistence
+# Network config persistence (stored in pdo_mapping.json → "network" key)
 # ---------------------------------------------------------------------------
-
-
-def _load_net_config() -> dict:
-    defaults = {"adapter": None, "slave": 0, "cycle_ms": 0.2}
-    try:
-        if _CONFIG_FILE.exists():
-            for line in _CONFIG_FILE.read_text().splitlines():
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k == "adapter":
-                        defaults["adapter"] = v if v else None
-                    elif k == "slave":
-                        defaults["slave"] = int(v)
-                    elif k == "cycle_ms":
-                        defaults["cycle_ms"] = float(v)
-    except Exception:
-        pass
-    return defaults
-
-
-def _save_net_config(adapter: str | None, slave: int, cycle_ms: float):
-    try:
-        _CONFIG_FILE.write_text(
-            f"adapter={adapter or ''}\nslave={slave}\ncycle_ms={cycle_ms}\n"
-        )
-    except Exception as exc:
-        print(f"[WARN] Could not save net config: {exc}")
 
 
 def _find_pdo_config():
@@ -90,6 +61,38 @@ def _find_pdo_config():
         if p.exists():
             return str(p)
     return None
+
+
+def _load_net_config(pdo_config_path: str | None) -> dict:
+    defaults = {"adapter": None, "slave": 0, "cycle_ms": 0.2}
+    try:
+        if pdo_config_path and Path(pdo_config_path).exists():
+            raw = json.loads(Path(pdo_config_path).read_text(encoding="utf-8"))
+            net = raw.get("network", {})
+            if "adapter" in net:
+                defaults["adapter"] = net["adapter"]
+            if "slave" in net:
+                defaults["slave"] = int(net["slave"])
+            if "cycle_ms" in net:
+                defaults["cycle_ms"] = float(net["cycle_ms"])
+    except Exception:
+        pass
+    return defaults
+
+
+def _save_net_config(pdo_config_path: str | None, adapter: str | None,
+                     slave: int, cycle_ms: float):
+    if not pdo_config_path:
+        return
+    try:
+        p = Path(pdo_config_path)
+        existing = {}
+        if p.exists():
+            existing = json.loads(p.read_text(encoding="utf-8"))
+        existing["network"] = {"adapter": adapter, "slave": slave, "cycle_ms": cycle_ms}
+        p.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"[WARN] Could not save net config: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +142,8 @@ class MotorBridge:
         max_trq = self.motor.read_sdo(0x6072, 0x00)
         self._max_torque = max_trq if max_trq else 1000
         self._read_device_identity()
-        _save_net_config(self._adapter, self._slave_index, self._cycle_time_ms)
+        _save_net_config(self._pdo_config_path, self._adapter,
+                        self._slave_index, self._cycle_time_ms)
         print(f"[MotorBridge] Connected — {self._device_name} "
               f"hw={self._hw_version} fw={self._fw_version} "
               f"max_torque={self._max_torque}")
@@ -875,37 +879,23 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
 def main():
     global motor_bridge
 
-    saved = _load_net_config()
-
     parser = argparse.ArgumentParser(
         description="HDrive EtherCAT Web Server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Open http://localhost:<port> in your browser after starting.",
     )
-    parser.add_argument(
-        "--adapter", type=str, default=saved["adapter"],
-        help=f"EtherCAT network adapter name/UID (saved: {saved['adapter']})",
-    )
-    parser.add_argument(
-        "--slave", type=int, default=saved["slave"],
-        help=f"EtherCAT slave index (saved: {saved['slave']})",
-    )
-    parser.add_argument(
-        "--cycle", type=float, default=saved["cycle_ms"],
-        help=f"PDO cycle time in ms (saved: {saved['cycle_ms']})",
-    )
-    parser.add_argument(
-        "--port", type=int, default=8081,
-        help="HTTP server port (default: 8081)",
-    )
-    parser.add_argument(
-        "--pdo-config", type=str, default=None,
-        help="Path to pdo_mapping.json (auto-detected if not set)",
-    )
-    parser.add_argument(
-        "--list-adapters", action="store_true",
-        help="List available network adapters and exit",
-    )
+    parser.add_argument("--adapter", type=str, default=None,
+                        help="EtherCAT network adapter name/UID")
+    parser.add_argument("--slave", type=int, default=None,
+                        help="EtherCAT slave index")
+    parser.add_argument("--cycle", type=float, default=None,
+                        help="PDO cycle time in ms")
+    parser.add_argument("--port", type=int, default=8081,
+                        help="HTTP server port (default: 8081)")
+    parser.add_argument("--pdo-config", type=str, default=None,
+                        help="Path to pdo_mapping.json (auto-detected if not set)")
+    parser.add_argument("--list-adapters", action="store_true",
+                        help="List available network adapters and exit")
     args = parser.parse_args()
 
     if args.list_adapters:
@@ -917,18 +907,30 @@ def main():
         return
 
     pdo_path = args.pdo_config or _find_pdo_config()
-    if pdo_path:
+    if not pdo_path:
+        pdo_path = str(_PKG_DIR.parent / "pdo_mapping.json")
+        Path(pdo_path).write_text(
+            '{"network": {}, "default": {}, "slaves": {}}\n',
+            encoding="utf-8",
+        )
+        print(f"Created default PDO config: {pdo_path}")
+    else:
         print(f"PDO config: {pdo_path}")
 
+    saved = _load_net_config(pdo_path)
+    adapter = args.adapter if args.adapter is not None else saved["adapter"]
+    slave = args.slave if args.slave is not None else saved["slave"]
+    cycle = args.cycle if args.cycle is not None else saved["cycle_ms"]
+
     motor_bridge = MotorBridge(
-        adapter=args.adapter,
-        slave_index=args.slave,
-        cycle_time_ms=args.cycle,
+        adapter=adapter,
+        slave_index=slave,
+        cycle_time_ms=cycle,
         pdo_config_path=pdo_path,
     )
 
-    print(f"Connecting to HDrive on adapter {args.adapter}, "
-          f"slave {args.slave}, cycle {args.cycle} ms ...")
+    print(f"Connecting to HDrive on adapter {adapter}, "
+          f"slave {slave}, cycle {cycle} ms ...")
     try:
         motor_bridge.connect()
     except Exception as exc:
@@ -936,8 +938,8 @@ def main():
         print("  -> The web GUI will start anyway. Use the Network Config tab to connect.\n")
         try:
             print("Available adapters:")
-            for i, adapter in enumerate(HDriveETC.list_adapters()):
-                print(f"  [{i}] {adapter.name} — {adapter.desc}")
+            for i, a in enumerate(HDriveETC.list_adapters()):
+                print(f"  [{i}] {a.name} — {a.desc}")
         except Exception:
             pass
 

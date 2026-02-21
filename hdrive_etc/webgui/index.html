@@ -1020,12 +1020,36 @@
         .then(function(d){
             if (d.error) {
                 if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>" + d.error + "</span>";
-            } else {
-                if (statusEl) statusEl.innerHTML = "<span style='color:var(--green)'>Saved. Reconnect to apply changes.</span>";
+                return;
             }
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Saved. Reconnecting...</span>";
+            netSaveAndReconnect(statusEl);
         })
         .catch(function(e){
             if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Save failed: " + e + "</span>";
+        });
+    }
+
+    function netSaveAndReconnect(statusEl) {
+        var adapter = _netSelectedAdapter;
+        var params = adapter != null ? "?adapter=" + encodeURIComponent(adapter) : "";
+
+        fetch(host + "api/disconnect").then(function(r){ return r.json(); })
+        .then(function() {
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Scanning bus...</span>";
+            return fetch(host + "api/discover" + params);
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Scan failed: " + data.error + "</span>";
+                return;
+            }
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Connecting...</span>";
+            netConnect();
+        })
+        .catch(function(e) {
+            if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Reconnect failed: " + e + "</span>";
         });
     }
 

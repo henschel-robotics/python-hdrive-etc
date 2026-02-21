@@ -2,9 +2,46 @@
 
 Control [Henschel Robotics](https://henschel-robotics.ch) **HDrive** servo motors over **EtherCAT** from Python. No PLC required.
 
+![HDrive Web GUI](docs/images/01-home-dashboard.png)
+
+## Web Interface
+
+The SDK includes a full-featured **browser-based GUI** for motor control, monitoring, and testing.
+
+```bash
+pip install hdrive-etc
+hdrive-web
+```
+
+Then open **http://localhost:8081** in your browser.
+
+![HDrive Web GUI — Dashboard](docs/images/01-home-dashboard.png)
+
+The web GUI provides:
+
+- **Real-time telemetry** — live position, velocity, torque, temperature, and supply voltage
+- **Motor control** — switch modes (torque / velocity / position), set targets, enable / disable
+- **Parameter tuning** — adjust control bandwidth, damping, and inertia
+- **SDO browser** — read and write any drive object
+- **Bus discovery** — scan the EtherCAT bus and configure PDO mapping
+- **Built-in tests** — step response, Bode plot (frequency response), inertia identification, and network latency
+- **Calibration** — trigger encoder calibration from the browser
+
+| Control | Step Response | EtherCAT Config |
+|---|---|---|
+| ![Control](docs/images/02-control-torque.png) | ![Step Response](docs/images/05-tuning-step-response.png) | ![EtherCAT](docs/images/11-ethercat-config.png) |
+
+> **Full guide with all screenshots:** [`docs/web-interface.md`](docs/web-interface.md)
+
+```
+hdrive-web --adapter "\Device\NPF_{...}" --slave 0 --port 8081
+hdrive-web --list-adapters
+```
+
 ## Features
 
 - **Simple API** — `motor.set_torque(200)` and you're done
+- **Web interface** — built-in browser GUI for control, tuning, and testing
 - **Real-time EtherCAT** — 5 ms processdata cycle via PySOEM
 - **CiA 402 state machine** — automatic enable/disable transitions
 - **Thread-safe** — send commands from any thread

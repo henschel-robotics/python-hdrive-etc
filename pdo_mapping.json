@@ -1,16 +1,30 @@
 {
-  "default": {
-    "rx_pdo": ["0x1600", "0x1605"],
-    "tx_pdo": ["0x1A00", "0x1A05"]
+  "network": {
+    "adapter": "\\Device\\NPF_{4599DDA5-3F5D-466B-BC6A-BBD358731532}",
+    "slave": 0,
+    "cycle_ms": 0.2
   },
+  "default": {},
   "slaves": {
     "0": {
-      "rx_pdo": ["0x1600", "0x1605"],
-      "tx_pdo": ["0x1A00", "0x1A05"]
+      "rx_pdo": [
+        "0x1600",
+        "0x1605"
+      ],
+      "tx_pdo": [
+        "0x1A00",
+        "0x1A05"
+      ]
     },
     "1": {
-      "rx_pdo": ["0x1600", "0x1605"],
-      "tx_pdo": ["0x1A00", "0x1A05"]
+      "rx_pdo": [
+        "0x1600",
+        "0x1605"
+      ],
+      "tx_pdo": [
+        "0x1A00",
+        "0x1A05"
+      ]
     }
   }
 }

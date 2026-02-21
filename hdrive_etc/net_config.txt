@@ -1,3 +1,0 @@
-adapter=\Device\NPF_{4599DDA5-3F5D-466B-BC6A-BBD358731532}
-slave=0
-cycle_ms=0.2
