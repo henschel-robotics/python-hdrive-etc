@@ -87,7 +87,7 @@ hdrive-web          # Windows
 sudo hdrive-web     # Linux / Raspberry Pi
 ```
 
-Open **http://localhost:8081**, go to the **EtherCAT Config** tab, click **Scan Bus**, then **Save PDO Config**. This writes `ethercat_config.json` with your adapter, slave index, and PDO mapping.
+Open **http://localhost:8081**, go to the **EtherCAT Config** tab, click **Scan Bus**, then **Save PDO Config**. This writes `ethercat_config.json` with your adapter and PDO mapping.
 
 ### 2. Use the motor in your script
 

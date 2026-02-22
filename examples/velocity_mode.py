@@ -13,7 +13,8 @@ import time
 
 
 def main():
-    with HDriveETC(adapter=None) as motor:
+    with HDriveETC(adapter="eth0", slave_index=0) as motor:
+    # with HDriveETC(slave_index=0, pdo_config_path="ethercat_config.json") as motor:
 
         # Wait until motor is ready
         for _ in range(50):
@@ -29,7 +30,7 @@ def main():
         for _ in range(30):
             print(
                 f"  Velocity: {motor.get_velocity():8.1f} RPM  |  "
-                f"Position: {motor.get_position():8d}"
+                f"Position: {int(motor.get_position()):8d}"
             )
             time.sleep(0.1)
 
@@ -39,7 +40,7 @@ def main():
         for _ in range(30):
             print(
                 f"  Velocity: {motor.get_velocity():8.1f} RPM  |  "
-                f"Position: {motor.get_position():8d}"
+                f"Position: {int(motor.get_position()):8d}"
             )
             time.sleep(0.1)
 

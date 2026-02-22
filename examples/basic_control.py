@@ -21,7 +21,8 @@ def main():
     HDriveETC.list_adapters()
 
     # ---- connect and control ----
-    with HDriveETC(adapter=None) as motor:
+    with HDriveETC(adapter="eth0", slave_index=0) as motor:
+    # with HDriveETC(slave_index=0, pdo_config_path="ethercat_config.json") as motor:
 
         # Wait for the CiA 402 state machine to reach "operation_enabled"
         print("Waiting for motor to become ready...")
@@ -45,9 +46,9 @@ def main():
         for _ in range(50):
             status = motor.get_status()
             print(
-                f"Position: {status.get('position', 0):8d}  "
+                f"Position: {int(status.get('position', 0)):8d}  "
                 f"Velocity: {motor.get_velocity():8.1f} RPM  "
-                f"Torque: {status.get('torque', 0):5d}  "
+                f"Torque: {int(status.get('torque', 0)):5d}  "
                 f"State: {motor.get_state_name()}"
             )
             time.sleep(0.1)

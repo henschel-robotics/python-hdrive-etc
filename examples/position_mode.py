@@ -14,7 +14,8 @@ import time
 
 
 def main():
-    with HDriveETC(adapter=None) as motor:
+    with HDriveETC(adapter="eth0", slave_index=0) as motor:
+    # with HDriveETC(slave_index=0, pdo_config_path="ethercat_config.json") as motor:
 
         # Wait until motor is ready
         for _ in range(50):
@@ -33,7 +34,7 @@ def main():
 
             # Wait until close to target (simple polling)
             for _ in range(100):
-                pos = motor.get_position()
+                pos = int(motor.get_position())
                 error = abs(target - pos)
                 print(f"  Target: {target:8d}  Actual: {pos:8d}  Error: {error:6d}")
                 if error < 100:
