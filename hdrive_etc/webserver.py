@@ -48,14 +48,14 @@ _RESULTS_DIR = _WEBGUI_DIR / "results"
 _RESULTS_DIR.mkdir(exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Network config persistence (stored in pdo_mapping.json → "network" key)
+# Network config persistence (stored in ethercat_config.json → "network" key)
 # ---------------------------------------------------------------------------
 
 
 def _find_pdo_config():
     candidates = [
-        _PKG_DIR / "pdo_mapping.json",
-        _PKG_DIR.parent / "pdo_mapping.json",
+        _PKG_DIR / "ethercat_config.json",
+        _PKG_DIR.parent / "ethercat_config.json",
     ]
     for p in candidates:
         if p.exists():
@@ -919,7 +919,7 @@ def main():
     parser.add_argument("--port", type=int, default=8081,
                         help="HTTP server port (default: 8081)")
     parser.add_argument("--pdo-config", type=str, default=None,
-                        help="Path to pdo_mapping.json (auto-detected if not set)")
+                        help="Path to ethercat_config.json (auto-detected if not set)")
     parser.add_argument("--list-adapters", action="store_true",
                         help="List available network adapters and exit")
     args = parser.parse_args()
@@ -934,7 +934,7 @@ def main():
 
     pdo_path = args.pdo_config or _find_pdo_config()
     if not pdo_path:
-        pdo_path = str(_PKG_DIR.parent / "pdo_mapping.json")
+        pdo_path = str(_PKG_DIR.parent / "ethercat_config.json")
         Path(pdo_path).write_text(
             '{"network": {}, "default": {}, "slaves": {}}\n',
             encoding="utf-8",

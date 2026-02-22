@@ -127,7 +127,7 @@ The **EtherCAT Config** page handles bus setup:
 1. **Select adapter** — pick the Ethernet interface connected to the EtherCAT bus
 2. **Scan Bus** — detect all slaves; shows device name, vendor, product code, I/O sizes
 3. **PDO Configuration** — check/uncheck RxPDO and TxPDO assignments per slave
-4. **Save PDO Config** — persists the mapping to `pdo_mapping.json`; the system automatically disconnects, re-scans, and reconnects with the new mapping
+4. **Save PDO Config** — persists the mapping to `ethercat_config.json`; the system automatically disconnects, re-scans, and reconnects with the new mapping
 
 ---
 
@@ -140,6 +140,6 @@ hdrive-web [OPTIONS]
   --slave INDEX         Slave index (default: 0)
   --cycle MICROSECONDS  PDO cycle time in µs (default: 5000)
   --port PORT           HTTP port (default: 8081)
-  --pdo-config PATH     Path to pdo_mapping.json
+  --pdo-config PATH     Path to ethercat_config.json
   --list-adapters       List available network adapters and exit
 ```
