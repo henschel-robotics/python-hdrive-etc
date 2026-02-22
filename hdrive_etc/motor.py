@@ -8,8 +8,10 @@ Can be used standalone (creates its own bus internally) or attached
 to a shared :class:`EtherCATBus` for multi-slave setups.
 """
 
+import json
 import struct
 import threading
+from pathlib import Path
 
 import pysoem
 
@@ -127,10 +129,18 @@ class HDriveETC:
 
     def __init__(self, adapter=None, slave_index=0, cycle_time_ms=10,
                  bus=None, pdo_config_path=None):
+        self._pdo_config_path = pdo_config_path
+
+        if pdo_config_path:
+            net = self._read_network_config(pdo_config_path)
+            if adapter is None and net.get("adapter"):
+                adapter = net["adapter"]
+            if cycle_time_ms == 10 and net.get("cycle_ms"):
+                cycle_time_ms = float(net["cycle_ms"])
+
         self.adapter = adapter
         self.slave_index = slave_index
         self.cycle_time = cycle_time_ms / 1000.0
-        self._pdo_config_path = pdo_config_path
 
         # EtherCAT receive timeout: 2x cycle time (microseconds)
         self.rx_timeout_us = int(cycle_time_ms * 2000)
@@ -174,6 +184,15 @@ class HDriveETC:
 
         if bus is not None:
             bus.register_slave(self)
+
+    @staticmethod
+    def _read_network_config(pdo_config_path):
+        """Read the 'network' section from an ethercat_config.json file."""
+        try:
+            raw = json.loads(Path(pdo_config_path).read_text(encoding="utf-8"))
+            return raw.get("network", {})
+        except Exception:
+            return {}
 
     # ------------------------------------------------------------------
     # Slave-handle interface (called by EtherCATBus)

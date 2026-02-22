@@ -78,20 +78,28 @@ pip install -e ".[dev]"
 
 ## Quickstart
 
+### 1. Configure the bus (one-time setup)
+
+Start the web interface and use it to select your adapter, scan the bus, configure PDO assignments, and save:
+
+```bash
+hdrive-web          # Windows
+sudo hdrive-web     # Linux / Raspberry Pi
+```
+
+Open **http://localhost:8081**, go to the **EtherCAT Config** tab, click **Scan Bus**, then **Save PDO Config**. This writes `ethercat_config.json` with your adapter, slave index, and PDO mapping.
+
+### 2. Use the motor in your script
+
 ```python
 from hdrive_etc import HDriveETC, Mode
 import time
 
-with HDriveETC(adapter=r"\Device\NPF_{...}") as motor:
-    # Wait for motor to be ready
-    while motor.get_state_name() != "operation_enabled":
-        time.sleep(0.1)
-
-    # Apply torque
+# slave_index = position of the HDrive on the bus (check "Scan Bus" in the web GUI)
+with HDriveETC(slave_index=0, pdo_config_path="ethercat_config.json") as motor:
     motor.set_mode(Mode.TORQUE)
     motor.set_torque(200)  # 200 mNm
 
-    # Read telemetry
     time.sleep(1)
     print(f"Position: {motor.get_position()}")
     print(f"Velocity: {motor.get_velocity():.1f} RPM")
@@ -108,14 +116,15 @@ with HDriveETC(adapter=r"\Device\NPF_{...}") as motor:
 ```python
 from hdrive_etc import HDriveETC
 
-# Find your network adapter name
-HDriveETC.list_adapters()
-
-# Recommended: use a context manager (auto-connect and auto-disconnect)
-with HDriveETC(adapter=r"\Device\NPF_{...}") as motor:
+# Recommended: use ethercat_config.json from the web interface
+with HDriveETC(slave_index=0, pdo_config_path="ethercat_config.json") as motor:
     motor.set_torque(200)
 
 # Motor is stopped and connection is closed automatically.
+
+# Alternative: specify adapter directly (slave_index is always required)
+with HDriveETC(adapter=r"\Device\NPF_{...}", slave_index=0) as motor:
+    motor.set_torque(200)
 ```
 
 ### Torque Control
