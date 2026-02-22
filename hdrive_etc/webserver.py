@@ -308,6 +308,13 @@ _test_lock = threading.Lock()
 _test_abort = threading.Event()
 
 
+_INSTALL_HINT = (
+    "Install the optional test dependencies:  "
+    "pip install hdrive-etc[tests]   "
+    "(requires matplotlib and scipy)"
+)
+
+
 def _import_test(module_name):
     """Import a test module from the test_scripts/ directory."""
     if str(_TEST_SCRIPTS_DIR) not in sys.path:
@@ -319,7 +326,7 @@ def run_step_response(motor, params: dict) -> dict:
     try:
         mod = _import_test("test_step_response")
     except ImportError as e:
-        return {"error": f"Failed to import test module: {e}"}
+        return {"error": f"Missing dependency: {e}\n\n{_INSTALL_HINT}"}
 
     step_size = int(params.get("step_size", 180))
     record_time = float(params.get("record_time", 2000)) / 1000.0
@@ -385,7 +392,7 @@ def run_bode_plot(motor, params: dict) -> dict:
     try:
         mod = _import_test("test_frequency_response")
     except ImportError as e:
-        return {"error": f"Failed to import test module: {e}"}
+        return {"error": f"Missing dependency: {e}\n\n{_INSTALL_HINT}"}
 
     start_freq = int(params.get("start_freq", 5))
     stop_freq = int(params.get("stop_freq", 30))
@@ -454,7 +461,7 @@ def run_inertia_test(motor, params: dict) -> dict:
     try:
         mod = _import_test("test_inertia_identification")
     except ImportError as e:
-        return {"error": f"Failed to import test module: {e}"}
+        return {"error": f"Missing dependency: {e}\n\n{_INSTALL_HINT}"}
 
     torque_mNm = int(params.get("torque_mNm", 200))
     duration_ms = float(params.get("duration_ms", 500))
@@ -509,7 +516,7 @@ def run_network_test(motor, params: dict) -> dict:
     try:
         mod = _import_test("test_network_latency")
     except ImportError as e:
-        return {"error": f"Failed to import test module: {e}"}
+        return {"error": f"Missing dependency: {e}\n\n{_INSTALL_HINT}"}
 
     num_samples = int(params.get("num_samples", 200))
 
@@ -549,6 +556,8 @@ _SKIP_ADAPTERS = (
     "wi-fi direct", "wan miniport", "hyper-v",
 )
 
+_SKIP_LINUX_IFACES = ("lo", "wlan", "wlp", "docker", "br-", "veth", "virbr")
+
 
 class HDriveRequestHandler(SimpleHTTPRequestHandler):
     """HTTP handler that serves the web GUI and proxies API calls to the motor."""
@@ -575,6 +584,8 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                     desc = a.desc.decode("utf-8", errors="replace") if isinstance(a.desc, bytes) else str(a.desc)
                     if any(s in desc.lower() for s in _SKIP_ADAPTERS):
                         continue
+                    if any(name.startswith(p) for p in _SKIP_LINUX_IFACES):
+                        continue
                     result.append({"name": name, "desc": desc})
                 self._send_json({
                     "adapters": result,
@@ -593,6 +604,19 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                 adapter = query.get("adapter", [motor_bridge._adapter or ""])[0]
                 slave = int(query.get("slave", [str(motor_bridge._slave_index)])[0])
                 cycle = float(query.get("cycle", [str(motor_bridge._cycle_time_ms)])[0])
+
+                try:
+                    found = EtherCATBus.discover(
+                        adapter=adapter or None,
+                        pdo_config_path=motor_bridge._pdo_config_path,
+                    )
+                    target = next((s for s in found if s["index"] == slave), None)
+                    if target and "hdrive" not in (target.get("device_name") or target.get("name") or "").lower():
+                        self._send_json({"error": f"Slave {slave} ({target.get('device_name') or target.get('name')}) is not an HDrive motor. Only HDrive devices are supported."})
+                        return
+                except Exception:
+                    pass
+
                 motor_bridge.connect(adapter=adapter or None,
                                      slave_index=slave, cycle_time_ms=cycle)
                 self._send_json({
@@ -632,6 +656,8 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                     adapter=adapter or None,
                     pdo_config_path=motor_bridge._pdo_config_path,
                 )
+                for s in slaves:
+                    s["is_hdrive"] = "hdrive" in (s.get("device_name") or s.get("name") or "").lower()
                 self._send_json({"slaves": slaves, "adapter": adapter})
             except Exception as exc:
                 self._send_json({"error": str(exc)})

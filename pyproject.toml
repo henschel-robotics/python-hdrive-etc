@@ -44,6 +44,10 @@ Documentation = "https://henschel-robotics.ch"
 Repository = "https://github.com/henschel-robotics/python-hdrive-etc"
 
 [project.optional-dependencies]
+tests = [
+    "matplotlib",
+    "scipy",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

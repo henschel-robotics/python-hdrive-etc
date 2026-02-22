@@ -38,6 +38,13 @@ hdrive-web --adapter "\Device\NPF_{...}" --slave 0 --port 8081
 hdrive-web --list-adapters
 ```
 
+> **Raspberry Pi / Linux:** The web GUI saves its configuration (adapter, slave, PDO mapping) to `pdo_mapping.json`. When installed via pip, the default file is inside the package directory. Copy it to your working directory for easy editing:
+>
+> ```bash
+> cp $(python3 -c "import hdrive_etc, os; print(os.path.join(os.path.dirname(hdrive_etc.__file__), '..', 'pdo_mapping.json'))") .
+> hdrive-web --pdo-config ./pdo_mapping.json
+> ```
+
 ## Features
 
 - **Simple API** — `motor.set_torque(200)` and you're done

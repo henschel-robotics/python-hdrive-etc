@@ -922,6 +922,8 @@
     }
 
     function netConnect() {
+        var btn = byId("netBtnConnect");
+        if (btn && btn._hdriveDisabled) return;
         const el = byId("netStatus");
         const adapter = _netSelectedAdapter;
         const slave = _netSelectedSlave;
@@ -1063,6 +1065,24 @@
                 el.classList.remove("selected");
             }
         });
+        _updateConnectButton();
+    }
+
+    function _updateConnectButton() {
+        var btn = byId("netBtnConnect");
+        if (!btn) return;
+        var slave = _discoveredSlaves.find(function(s) { return s.index === _netSelectedSlave; });
+        var isHDrive = slave && slave.is_hdrive;
+        btn._hdriveDisabled = !isHDrive;
+        if (!isHDrive) {
+            btn.style.opacity = "0.4";
+            btn.style.cursor = "not-allowed";
+            btn.title = "Select an HDrive motor to connect";
+        } else {
+            btn.style.opacity = "";
+            btn.style.cursor = "";
+            btn.title = "";
+        }
     }
 
     function netScanBus() {
@@ -1087,11 +1107,13 @@
                     return;
                 }
                 _discoveredSlaves = slaves;
-                if (_netSelectedSlave == null || _netSelectedSlave >= slaves.length) _netSelectedSlave = 0;
+                if (_netSelectedSlave == null || _netSelectedSlave >= slaves.length) _netSelectedSlave = firstHDrive != null ? firstHDrive : 0;
                 statusEl.innerHTML = "<span style='color:var(--accent)'>" + slaves.length + " slave(s) found &mdash; click a slave to select it for connection</span>";
 
                 let html = "";
+                var firstHDrive = null;
                 slaves.forEach(s => {
+                    if (s.is_hdrive && firstHDrive === null) firstHDrive = s.index;
                     var rxCb = _pdoCheckboxes(s.index, "rx", s.available_rx_pdo, s.rx_pdo);
                     var txCb = _pdoCheckboxes(s.index, "tx", s.available_tx_pdo, s.tx_pdo);
                     var pdoHtml = "";
@@ -1102,13 +1124,17 @@
                             "</details>";
                     }
                     var sel = (s.index === _netSelectedSlave) ? " selected" : "";
+                    var clickHandler = "onclick='_netSelectSlave(" + s.index + ")'";
+                    var badge = s.is_hdrive
+                        ? "<span style='font-size:9px;font-weight:700;color:var(--accent);background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.25);padding:1px 6px;border-radius:3px;margin-left:6px'>HDrive</span>"
+                        : "";
 
                     html +=
-                        "<div class='net-disc-slave" + sel + "' data-slave='" + s.index + "' onclick='_netSelectSlave(" + s.index + ")' style='padding:10px 14px;border-top:1px solid var(--border);cursor:pointer;transition:background 0.15s'>" +
+                        "<div class='net-disc-slave" + sel + "' data-slave='" + s.index + "' " + clickHandler + " style='padding:10px 14px;border-top:1px solid var(--border);transition:background 0.15s;cursor:pointer'>" +
                         "<div style='display:flex;align-items:center;gap:10px'>" +
                         "<div style='background:var(--bg-sidebar);border-radius:6px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--accent);font-size:15px'>" + s.index + "</div>" +
                         "<div style='flex:1'>" +
-                        "<div style='font-weight:600;font-size:13px'>" + (s.device_name || s.name || "Slave " + s.index) + "</div>" +
+                        "<div style='font-weight:600;font-size:13px'>" + (s.device_name || s.name || "Slave " + s.index) + badge + "</div>" +
                         "<div style='font-size:11px;color:var(--text-dim)'>" +
                         "Vendor " + s.vendor_id + " &middot; Product " + s.product_code + " &middot; Rev " + s.revision +
                         (s.hw_version ? " &middot; HW " + s.hw_version : "") +
@@ -1128,6 +1154,7 @@
                     "<span id='netPdoSaveStatus' style='font-size:11px'></span>" +
                     "</div>";
                 resultEl.innerHTML = html;
+                _updateConnectButton();
             })
             .catch(err => {
                 statusEl.innerHTML = "<span style='color:#f55'>Scan failed: " + err + "</span>";
