@@ -137,12 +137,24 @@ def decode_rx_pdo(data):
         "mode_display": mode_display,
     }
 
-    # Debug values (optional 64-byte block)
+    # Debug values (optional 64-byte PDO 0x1A05 block). Not present when only
+    # 0x1A00 is mapped (typical minimal config); the web server then fills
+    # telemetry from the CiA snapshot fields above.
     offset = struct.calcsize(fmt_motor)
     if len(data) >= offset + 64:
         result["debug_values"] = struct.unpack_from("<16f", data, offset)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# CiA 402 controlword commands (firmware Common/statemachine.h, IEC 61800)
+# ---------------------------------------------------------------------------
+
+CIA402_CW_FAULT_RESET = 0x0080  # CONTROLWORD_COMMAND_FAULTRESET / _MASK
+CIA402_CW_SHUTDOWN = 0x0006  # CONTROLWORD_COMMAND_SHUTDOWN
+CIA402_CW_SWITCH_ON = 0x0007  # CONTROLWORD_COMMAND_SWITCHON
+CIA402_CW_ENABLE_OPERATION = 0x000F  # CONTROLWORD_COMMAND_ENABLEOPERATION
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +187,12 @@ def cia402_state_from_status(status_word):
 def next_control_word(state):
     """Return the next controlword to advance the CiA 402 state machine.
 
-    Sequence: ``0x0006`` (shutdown) -> ``0x0007`` (switch on) ->
+    Sequence: ``0x0080`` (fault reset) in fault states, then
+    ``0x0006`` (shutdown) -> ``0x0007`` (switch on) ->
     ``0x000F`` (enable operation).
     """
+    if state in ("fault", "fault_reaction"):
+        return 0x0080
     if state in ("not_ready", "switch_on_disabled"):
         return 0x0006
     if state == "ready_to_switch_on":

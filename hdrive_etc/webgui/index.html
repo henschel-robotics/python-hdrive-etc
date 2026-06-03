@@ -4,12 +4,12 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script>host = "/"; let UPDATE = true;</script>
-    <script type="text/javascript" src="js/mainfunctions.js?v=2"></script>
+    <script>host = "/"; let UPDATE = true; var _telemetryAbort = null;</script>
+    <script type="text/javascript" src="js/mainfunctions.js?v=5"></script>
     <script type="text/javascript" src="js/plotly.min.js"></script>
     <script type="text/javascript" src="js/generators.js?v=3"></script>
 
-    <link rel="stylesheet" href="css/style.css?v=5" />
+    <link rel="stylesheet" href="css/style.css?v=7" />
     <link rel="icon" href="logo_25_smal_inv.svg" type="image/svg+xml" />
     <title>HDrive ETC — Motor Control</title>
 </head>
@@ -113,7 +113,7 @@
                         <h1>HDrive ETC</h1>
                         <span class="home-meta">FW <span id="home-fw">—</span> · Mode <span id="home-mode">—</span></span>
                     </div>
-                    <div id="home-state-badge" class="home-badge home-badge--idle">IDLE</div>
+                    <div id="home-state-badge" class="home-badge home-badge--idle" onclick="homeBadgeClickClearError()" role="status">IDLE</div>
                 </div>
 
                 <!-- Big gauges row -->
@@ -173,12 +173,15 @@
                         <div class="gauge-unit">derating</div>
                     </div>
                     <div class="gauge-card gauge-card--small">
-                        <div class="gauge-error-display">
-                            <div class="gauge-value gauge-value--error" id="gauge-error-val">0</div>
-                            <div class="clear-error-btn" id="clearErrorBtn" onclick="clearError()" title="Clear error">✕</div>
+                        <div class="gauge-error-click-area" id="gauge-error-click-area" role="button" tabindex="-1"
+                            aria-label="Last drive error" onclick="homeGaugeErrorClick()" onkeydown="homeGaugeErrorKey(event)">
+                            <div class="gauge-error-display">
+                                <div class="gauge-value gauge-value--error" id="gauge-error-val">0</div>
+                                <div class="clear-error-btn" id="clearErrorBtn" onclick="event.stopPropagation(); clearError();" title="Clear error">✕</div>
+                            </div>
+                            <div class="gauge-label">Error 0x603F</div>
+                            <div class="gauge-unit" id="gauge-error-desc">No error</div>
                         </div>
-                        <div class="gauge-label">Last Error</div>
-                        <div class="gauge-unit" id="gauge-error-desc">No error</div>
                     </div>
                     <div class="gauge-card gauge-card--small">
                         <div class="din-leds">
@@ -274,6 +277,49 @@
         53: "Null pointer error",
     };
 
+    /** Common CiA 402 ``0x603F`` error codes (IEC 61800-7-200 style). */
+    const CIA603F_KNOWN = {
+        0x1000: "Generic error",
+        0x2310: "Over current",
+        0x3210: "Undervoltage",
+        0x3220: "Overvoltage",
+        0x4110: "Overtemperature drive",
+        0x5111: "Overvoltage DC link",
+        0x7300: "Sensor / feedback error",
+        0x8611: "Position following error",
+        0xA000: "Manufacturer specific",
+    };
+
+    function hexU16(n) {
+        n = (n | 0) & 0xFFFF;
+        return "0x" + n.toString(16).toUpperCase().padStart(4, "0");
+    }
+
+    /** Human-readable line for CiA ErrorCode register (and HDrive codes 0–53). */
+    function describeError603f(code, ciaFault, statusWord) {
+        code = code | 0;
+        if (code !== 0) {
+            if (Object.prototype.hasOwnProperty.call(ERROR_CODES, code))
+                return ERROR_CODES[code] + " · " + hexU16(code);
+            if (Object.prototype.hasOwnProperty.call(CIA603F_KNOWN, code))
+                return CIA603F_KNOWN[code] + " (" + hexU16(code) + ")";
+            return "0x603F " + hexU16(code) + " (" + code + ")";
+        }
+        if (ciaFault)
+            return decodeCiA402State(statusWord) + " (fault; 0x603F=0) — click to reset";
+        return "No error (0x603F)";
+    }
+
+    /** Sidebar / live row HTML for 0x603F value. */
+    function format603fLiveHtml(code) {
+        code = code | 0;
+        if (code === 0) return "0";
+        return String(code) + " <span style=\"opacity:0.8;font-size:0.92em\">" + hexU16(code) + "</span>";
+    }
+
+    /** True when UI should offer fault reset (non-zero 603F or CiA 402 fault state). */
+    var _homeFaultResetAvailable = false;
+
     function decodeCiA402State(sw) {
         sw = sw | 0;
         if ((sw & 0x4F) === 0x00) return "Not ready";
@@ -287,6 +333,15 @@
         return "0x" + sw.toString(16);
     }
 
+    /** CiA 402 fault or fault-reaction (matches SDK ``cia402_state_from_status`` / PDO logic). */
+    function cia402NeedsFaultReset(sw) {
+        sw = sw | 0;
+        var masked = sw & 0x006f;
+        if (masked === 0x000f || masked === 0x0008) return true;
+        if ((sw & 0x4f) === 0x0f || (sw & 0x4f) === 0x08) return true;
+        return false;
+    }
+
     var _cia402Labels = [
         "Ready", "Switched On", "Op Enabled", "Fault",
         "Voltage", "Quick Stop", "Sw Disabled", "Warning",
@@ -294,69 +349,119 @@
     ];
 
     function updateHomeGauges(byteArray) {
-        // Unpack from the 20-float packet
-        const pos     = byteArray[1];          // position (deg)
-        const speed   = byteArray[2];          // velocity
-        const torque  = byteArray[6];          // actual torque (0x6077)
-        const thermal = byteArray[5];          // thermal derating factor (0..1)
-        const temp    = byteArray[8];          // temperature (°C)
-        const volt    = byteArray[10];         // supply voltage (V)
-        const mode    = byteArray[9] | 0;      // mode of operation
-        objectsFromDrive.set("99,0", mode !== 0 ? 1 : 0);
-        const stopBtn = byId("emergencyStop");
-        if (stopBtn) stopBtn.style.display = mode !== 0 ? "flex" : "none";
-        const fw      = objectsFromDrive.get("100a,0") || "—";
-        const lastErr = byteArray[7] | 0;      // error code
-        const digIn   = byteArray[14] | 0;     // digital inputs
+        try {
+            // Unpack from the 20-float packet
+            const pos     = byteArray[1];          // position (deg)
+            const speed   = byteArray[2];          // velocity
+            const torque  = byteArray[6];          // actual torque (0x6077)
+            const thermal = byteArray[5];          // thermal derating factor (0..1)
+            const temp    = byteArray[8];          // temperature (°C)
+            const volt    = byteArray[10];         // supply voltage (V)
+            const mode    = byteArray[9] | 0;      // mode of operation
+            const statusWord = byteArray.length > 15 ? (byteArray[15] | 0) : 0;
+            const opEnabled = (statusWord & 0x006f) === 0x0027; // CiA 402 "Operation enabled"
+            objectsFromDrive.set("99,0", mode !== 0 ? 1 : 0);
+            const stopBtn = byId("emergencyStop");
+            if (stopBtn) stopBtn.style.display = opEnabled ? "flex" : "none";
+            const fw      = objectsFromDrive.get("100a,0") || "—";
+            const lastErr = byteArray[7] | 0;      // CiA 402 ErrorCode 0x603F:00 (from telemetry)
+            const digIn   = byteArray[14] | 0;     // digital inputs
+            const ciaFault = cia402NeedsFaultReset(statusWord);
+            const canReset = lastErr !== 0 || ciaFault;
 
-        // Values
-        const gv = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
-        gv("gauge-pos-val",  pos.toFixed(1));
-        gv("gauge-spd-val",  speed.toFixed(0));
-        gv("gauge-trq-val",  torque.toFixed(0));
-        gv("gauge-temp-val", temp.toFixed(1));
-        gv("gauge-volt-val", volt.toFixed(1));
-        gv("gauge-thermal-val", thermal.toFixed(2) * 100 + "%");
-        gv("gauge-error-val", lastErr);
-        gv("gauge-error-desc", ERROR_CODES[lastErr] || ("Unknown error " + lastErr));
-        const clrBtn = byId("clearErrorBtn");
-        if (clrBtn) clrBtn.style.display = lastErr !== 0 ? "flex" : "none";
-        const led1 = byId("din-led1");
-        const led2 = byId("din-led2");
-        if (led1) led1.classList.toggle("on", !!(digIn & 1));
-        if (led2) led2.classList.toggle("on", !!(digIn & 2));
-
-        // Status bar
-        gv("home-fw", fw);
-        gv("home-mode", CIA402_MODE_NAMES[mode] || ("Mode " + mode));
-
-        // Badge
-        const badge = document.getElementById("home-state-badge");
-        if (badge) {
-            if (lastErr !== 0) {
-                badge.textContent = "ERROR";
-                badge.className = "home-badge home-badge--error";
-            } else if (mode > 0) {
-                badge.textContent = "ACTIVE";
-                badge.className = "home-badge home-badge--active";
-            } else {
-                badge.textContent = "IDLE";
-                badge.className = "home-badge home-badge--idle";
+            // Values
+            const gv = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+            gv("gauge-pos-val",  Number(pos).toFixed(1));
+            gv("gauge-spd-val",  Number(speed).toFixed(0));
+            gv("gauge-trq-val",  Number(torque).toFixed(0));
+            gv("gauge-temp-val", Number(temp).toFixed(1));
+            gv("gauge-volt-val", Number(volt).toFixed(1));
+            const th = Number(thermal);
+            gv("gauge-thermal-val", Number.isFinite(th) ? (th * 100).toFixed(0) + "%" : "—");
+            gv("gauge-error-val", lastErr !== 0 ? hexU16(lastErr) : (ciaFault ? "CiA" : "0"));
+            gv("gauge-error-desc", describeError603f(lastErr, ciaFault, statusWord));
+            _homeFaultResetAvailable = canReset;
+            const errClick = byId("gauge-error-click-area");
+            if (errClick) {
+                errClick.classList.toggle("gauge-error-click-area--can-reset", canReset);
+                errClick.tabIndex = canReset ? 0 : -1;
+                errClick.setAttribute("aria-disabled", canReset ? "false" : "true");
+                if (canReset) {
+                    errClick.title = "Click or press Enter to reset fault / clear drive error";
+                    errClick.setAttribute("aria-label", (lastErr !== 0 ? ("Drive error " + lastErr) : "CiA 402 fault") + ". Click to reset.");
+                } else {
+                    errClick.removeAttribute("title");
+                    errClick.setAttribute("aria-label", "Error 0x603F — no fault");
+                }
             }
-        }
+            const clrBtn = byId("clearErrorBtn");
+            if (clrBtn) clrBtn.style.display = canReset ? "flex" : "none";
+            const led1 = byId("din-led1");
+            const led2 = byId("din-led2");
+            if (led1) led1.classList.toggle("on", !!(digIn & 1));
+            if (led2) led2.classList.toggle("on", !!(digIn & 2));
 
-        // Gauge arcs (fraction of max) — position has no gauge (unbounded)
-        setGauge("gauge-spd-fill",  Math.abs(speed) / 3000);  // speed ±3000 RPM
-        setGauge("gauge-trq-fill",  Math.abs(torque) / 100);
-        setGauge("gauge-temp-fill", temp / 80);
-        setGauge("gauge-volt-fill", volt / 48);
-        setGauge("gauge-thermal-fill", thermal);
+            // Status bar
+            gv("home-fw", fw);
+            gv("home-mode", CIA402_MODE_NAMES[mode] || ("Mode " + mode));
+
+            // Badge
+            const badge = document.getElementById("home-state-badge");
+            if (badge) {
+                if (canReset) {
+                    badge.textContent = "ERROR";
+                    badge.className = "home-badge home-badge--error";
+                    badge.title = "Click to reset fault / clear drive error";
+                } else if (mode > 0) {
+                    badge.textContent = "ACTIVE";
+                    badge.className = "home-badge home-badge--active";
+                    badge.removeAttribute("title");
+                } else {
+                    badge.textContent = "IDLE";
+                    badge.className = "home-badge home-badge--idle";
+                    badge.removeAttribute("title");
+                }
+            }
+
+            // Gauge arcs (fraction of max) — position has no gauge (unbounded)
+            setGauge("gauge-spd-fill",  Math.abs(Number(speed)) / 3000);  // speed ±3000 RPM
+            const trqGaugeCap = (typeof window._driveMaxTorqueMnm === "number" && window._driveMaxTorqueMnm >= 10)
+                ? window._driveMaxTorqueMnm : 2000;
+            setGauge("gauge-trq-fill", Math.abs(Number(torque)) / trqGaugeCap);
+            setGauge("gauge-temp-fill", Number(temp) / 80);
+            setGauge("gauge-volt-fill", Number(volt) / 48);
+            setGauge("gauge-thermal-fill", Number.isFinite(th) ? th : 0);
+        } catch (e) {
+            console.warn("updateHomeGauges:", e);
+        }
     }
 
     // --- Clear error ---
 
     function clearError() {
-        ROM_writeOBJ("6637", "0", 100);
+        fetch(host + "api/reset-fault", { method: "POST" })
+            .then(function (r) {
+                if (!r.ok) ROM_writeOBJ("6637", "0", 100);
+            })
+            .catch(function () {
+                ROM_writeOBJ("6637", "0", 100);
+            });
+    }
+
+    function homeGaugeErrorClick() {
+        if (_homeFaultResetAvailable) clearError();
+    }
+
+    function homeGaugeErrorKey(ev) {
+        if (!_homeFaultResetAvailable) return;
+        if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            clearError();
+        }
+    }
+
+    function homeBadgeClickClearError() {
+        if (_homeFaultResetAvailable) clearError();
     }
 
     // --- Start calibration (mode -99) ---
@@ -390,6 +495,7 @@
             }
         }
         await ROM_writeOBJ("6637", "0", 1);
+        applyTorqueSliderLimits();
     }
 
     // --- Emergency stop ---
@@ -715,7 +821,7 @@
     function runInertiaTest() {
         const torqueMNm  = byId("m82s0")?.value || 200;
         const durationMs = byId("m82s1")?.value || 500;
-        const torqueLimit = byId("m82s2")?.value || 600;
+        const torqueLimit = byId("m82s2")?.value || 2000;
 
         const status = byId("inertiaTestStatus");
         status.textContent = "Running...";
@@ -923,8 +1029,12 @@
 
     function netConnect() {
         var btn = byId("netBtnConnect");
-        if (btn && btn._hdriveDisabled) return;
         const el = byId("netStatus");
+        if (btn && btn._hdriveDisabled) {
+            el.textContent = "Please scan the bus and click on an HDrive.";
+            el.className = "test-status test-status--error";
+            return;
+        }
         const adapter = _netSelectedAdapter;
         const slave = _netSelectedSlave;
         const cycleUs = parseFloat(byId("netCycle").value);
@@ -938,12 +1048,16 @@
             .then(r => r.json())
             .then(data => {
                 if (data.error) {
-                    el.textContent = "Error: " + data.error;
+                    el.textContent = data.error;
                     el.className = "test-status test-status--error";
                 } else {
+                    if (data.max_torque_mnm != null && !isNaN(Number(data.max_torque_mnm))) {
+                        window._driveMaxTorqueMnm = Math.max(10, Number(data.max_torque_mnm));
+                    }
                     netUpdateStatus(true, data.device + " (HW " + data.hw + ", FW " + data.fw + ")");
                     ROM_readOBJList(function() {
                         updateFields();
+                        applyTorqueSliderLimits();
                         updateFieldsSwitch();
                         updateDriveName();
                         updateLiveFromObjects();
@@ -958,6 +1072,9 @@
     }
 
     function netDisconnect() {
+        if (_telemetryAbort) {
+            try { _telemetryAbort.abort(); } catch (e) { /* ignore */ }
+        }
         fetch(host + "api/disconnect")
             .then(r => r.json())
             .then(() => netUpdateStatus(false))
@@ -1024,34 +1141,37 @@
                 if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>" + d.error + "</span>";
                 return;
             }
-            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Saved. Reconnecting...</span>";
-            netSaveAndReconnect(statusEl);
+            var pathInfo = d.path ? "<br><span style='color:var(--text-dim);font-size:10px'>Saved to: " + d.path + "</span>" : "";
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Saved. Reconnecting...</span>" + pathInfo;
+            netSaveAndReconnect(statusEl, pathInfo);
         })
         .catch(function(e){
             if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Save failed: " + e + "</span>";
         });
     }
 
-    function netSaveAndReconnect(statusEl) {
+    function netSaveAndReconnect(statusEl, pathInfo) {
+        pathInfo = pathInfo || "";
         var adapter = _netSelectedAdapter;
         var params = adapter != null ? "?adapter=" + encodeURIComponent(adapter) : "";
 
         fetch(host + "api/disconnect").then(function(r){ return r.json(); })
         .then(function() {
-            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Scanning bus...</span>";
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Scanning bus...</span>" + pathInfo;
             return fetch(host + "api/discover" + params);
         })
         .then(function(r){ return r.json(); })
         .then(function(data) {
             if (data.error) {
-                if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Scan failed: " + data.error + "</span>";
+                if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Scan failed: " + data.error + "</span>" + pathInfo;
                 return;
             }
-            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Connecting...</span>";
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--accent)'>Connecting...</span>" + pathInfo;
             netConnect();
+            if (statusEl) statusEl.innerHTML = "<span style='color:var(--success,#4f4)'>Done</span>" + pathInfo;
         })
         .catch(function(e) {
-            if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Reconnect failed: " + e + "</span>";
+            if (statusEl) statusEl.innerHTML = "<span style='color:#f55'>Reconnect failed: " + e + "</span>" + pathInfo;
         });
     }
 
@@ -1077,7 +1197,7 @@
         if (!isHDrive) {
             btn.style.opacity = "0.4";
             btn.style.cursor = "not-allowed";
-            btn.title = "Select an HDrive motor to connect";
+            btn.title = "Please scan the bus and click on an HDrive.";
         } else {
             btn.style.opacity = "";
             btn.style.cursor = "";
@@ -1107,13 +1227,17 @@
                     return;
                 }
                 _discoveredSlaves = slaves;
-                if (_netSelectedSlave == null || _netSelectedSlave >= slaves.length) _netSelectedSlave = firstHDrive != null ? firstHDrive : 0;
+                var firstHDrive = null;
+                slaves.forEach(function(s) {
+                    if (s.is_hdrive && firstHDrive === null) firstHDrive = s.index;
+                });
+                if (_netSelectedSlave == null || _netSelectedSlave >= slaves.length) {
+                    _netSelectedSlave = firstHDrive != null ? firstHDrive : 0;
+                }
                 statusEl.innerHTML = "<span style='color:var(--accent)'>" + slaves.length + " slave(s) found &mdash; click a slave to select it for connection</span>";
 
                 let html = "";
-                var firstHDrive = null;
                 slaves.forEach(s => {
-                    if (s.is_hdrive && firstHDrive === null) firstHDrive = s.index;
                     var rxCb = _pdoCheckboxes(s.index, "rx", s.available_rx_pdo, s.rx_pdo);
                     var txCb = _pdoCheckboxes(s.index, "tx", s.available_tx_pdo, s.tx_pdo);
                     var pdoHtml = "";
@@ -1167,6 +1291,9 @@
         .then(data => {
             if (data.slave != null) _netSelectedSlave = data.slave;
             if (data.cycle != null) byId("netCycle").value = Math.round(data.cycle * 1000);
+            if (data.max_torque_mnm != null && !isNaN(Number(data.max_torque_mnm))) {
+                window._driveMaxTorqueMnm = Math.max(10, Number(data.max_torque_mnm));
+            }
             netUpdateStatus(data.connected,
                 data.connected ? data.device + " (HW " + data.hw + ", FW " + data.fw + ")" : "");
         })
@@ -1293,9 +1420,10 @@
 
 <script>
     // Graph functions
-    let grafIsZoomed = 0;
-    let graphCheckBoxChanged = false;
-    
+    /** 1 while user has zoomed the live graph (shows “Continue graph”; does not block updates). */
+    var grafIsZoomed = 0;
+    /** Ignore plotly_relayout while appending telemetry (avoids false “zoomed” state). */
+    var suppressGraphRelayoutZoom = false;
     const graphCheckboxIds = ["graf_check_position", "graf_check_speed", "graf_check_fid", "graf_check_fiq", "graf_check_phaseA", "graf_check_phaseB"];
     const graphLabels = ["Position", "Speed", "Thermal", "Torque", "Phase A", "Phase B"];
     const graphColors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"];
@@ -1354,14 +1482,23 @@
         Plotly.restyle('div_g', update, [traceIdx]);
     }
 
-    // Detect zoom/relayout events
+    // Detect zoom/relayout events (ignore spurious events from extendTraces)
     byId('div_g').on('plotly_relayout', function(eventdata) {
+        if (!eventdata || suppressGraphRelayoutZoom) return;
         if (eventdata['xaxis.autorange'] || eventdata['yaxis.autorange']) {
             grafIsZoomed = 0;
-            byId("graphControl").style.display = "none";
-        } else if (eventdata['xaxis.range[0]'] || eventdata['yaxis.range[0]']) {
+            var gc0 = byId("graphControl");
+            if (gc0) gc0.style.display = "none";
+            return;
+        }
+        var keys = Object.keys(eventdata);
+        var axisRangeTouched = keys.some(function(k) {
+            return k.indexOf('xaxis.range') === 0 || k.indexOf('yaxis.range') === 0;
+        });
+        if (axisRangeTouched) {
             grafIsZoomed = 1;
-            byId("graphControl").style.display = "block";
+            var gc1 = byId("graphControl");
+            if (gc1) gc1.style.display = "block";
         }
     });
 
@@ -1393,6 +1530,9 @@
 
     const FRAME_SIZE = 80; // 20 x float32
 
+    /** Avoid rewriting CiA 402 sidebar HTML every frame (keeps Reset button clickable). */
+    var _lastCia402StatusBitsHtml = "";
+
     function processTelemetryFrame(byteArray) {
         let OLDsysteTime_s = systeTime_s;
         calculateSystemTime(byteArray[0] * 1e-6);
@@ -1420,11 +1560,23 @@
                 for (var _bi = 0; _bi < _cia402Labels.length; _bi++) {
                     if (!_cia402Labels[_bi]) continue;
                     var _bon = (_sw >> _bi) & 1;
-                    _bh += "<span style='color:" + (_bon ? "#4ade80" : "#444") + "'>"
+                    // Bit 3 = CiA402 Fault — show active fault in red, not green like other bits
+                    var _bitColor = _bon ? (_bi === 3 ? "var(--danger)" : "#4ade80") : "#444";
+                    _bh += "<span style='color:" + _bitColor + "'>"
                         + (_bon ? "\u25CF " : "\u25CB ") + _cia402Labels[_bi] + "</span>";
                 }
                 _bh += "</div>";
-                _sbEl.innerHTML = _bh;
+                var _needReset = cia402NeedsFaultReset(_sw) || ((byteArray[7] | 0) !== 0);
+                if (_needReset) {
+                    _bh += "<div style='margin-top:10px'>"
+                        + "<button type='button' class='cia402-reset-fault-btn' onclick='clearError()'>Reset fault</button>"
+                        + "<span style='display:block;margin-top:4px;font-size:10px;color:var(--text-faint)'>If the fault returns, fix the cause (supply, limits, wiring) before resetting again.</span>"
+                        + "</div>";
+                }
+                if (_bh !== _lastCia402StatusBitsHtml) {
+                    _lastCia402StatusBitsHtml = _bh;
+                    _sbEl.innerHTML = _bh;
+                }
             }
         } catch(e) { console.error("statusword:", e); }
         var _din = byteArray[14] | 0;
@@ -1434,11 +1586,9 @@
         setVal("m6062s0", (byteArray[12] / 10).toFixed(2));
         setVal("m606bs0", byteArray[11].toFixed(1));
         setVal("m6071s0", byteArray[13].toFixed(0));
-        setVal("m603fs0", byteArray[7] | 0);
+        setVal("m603fs0", format603fLiveHtml(byteArray[7] | 0));
 
         updateHomeGauges(byteArray);
-
-        if (grafIsZoomed) return;
 
         const maxPoints = 100;
         const newX = [systeTime_s];
@@ -1446,15 +1596,32 @@
             [byteArray[1]], [byteArray[2]], [byteArray[5]],
             [byteArray[6]], [byteArray[3]], [byteArray[4]]
         ];
-        Plotly.extendTraces('div_g', {
-            x: [newX, newX, newX, newX, newX, newX],
-            y: newData
-        }, [0, 1, 2, 3, 4, 5], maxPoints);
+        suppressGraphRelayoutZoom = true;
+        try {
+            Plotly.extendTraces('div_g', {
+                x: [newX, newX, newX, newX, newX, newX],
+                y: newData
+            }, [0, 1, 2, 3, 4, 5], maxPoints);
+        } catch (err) {
+            console.warn("Plotly.extendTraces:", err);
+        }
+        setTimeout(function () { suppressGraphRelayoutZoom = false; }, 32);
     }
 
+    /** Single in-flight telemetry fetch; parallel streams break Plotly.extendTraces on the same div. */
     async function connectTelemetryStream() {
+        if (_telemetryAbort) {
+            try { _telemetryAbort.abort(); } catch (e) { /* ignore */ }
+        }
+        const ac = new AbortController();
+        _telemetryAbort = ac;
+        const signal = ac.signal;
+        var reconnect = true;
         try {
-            const response = await fetch(host + "api/telemetry-stream");
+            const response = await fetch(host + "api/telemetry-stream", { signal });
+            if (!response.ok) {
+                throw new Error("telemetry HTTP " + response.status + " " + response.statusText);
+            }
             const reader = response.body.getReader();
             let buffer = new Uint8Array(0);
 
@@ -1470,14 +1637,24 @@
                 while (buffer.length >= FRAME_SIZE) {
                     const frame = buffer.slice(0, FRAME_SIZE);
                     buffer = buffer.slice(FRAME_SIZE);
-                    const byteArray = new Float32Array(frame.buffer);
+                    const byteArray = new Float32Array(frame.buffer, frame.byteOffset, FRAME_SIZE >> 2);
                     processTelemetryFrame(byteArray);
                 }
             }
         } catch (e) {
+            if (e.name === "AbortError") {
+                reconnect = false;
+                return;
+            }
             console.warn("Telemetry stream disconnected:", e.message);
+        } finally {
+            if (_telemetryAbort === ac) {
+                _telemetryAbort = null;
+            }
         }
-        setTimeout(connectTelemetryStream, 1000);
+        if (reconnect) {
+            setTimeout(connectTelemetryStream, 1000);
+        }
     }
 
     function showContent(topic) {
@@ -1540,7 +1717,7 @@
             case 'torqueCont_':
                 generateBoxTitle("torqueCont_", "Torque control", "Here the drive can be driven in troque mode.", "h1");
                 generateSwitch("torqueCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 128);
-                generateSlider("torqueCont_", "6071", "0", "Target torque", "mNm", 'Sets the torque to the drive', -600, 600);
+                generateSlider("torqueCont_", "6071", "0", "Target torque", "mNm", 'Sets the torque to the drive', -2000, 2000);
                 break;
 
             case 'speedCont_':
@@ -1548,14 +1725,14 @@
                 generateSwitch("speedCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 130);
                 generateSwitch("speedCont_", 99, 1, "Use Stepper mode", 'Uses a microstepping algorithm to achieve smooth motion, for example, in telescopes. However, this motion exhibits significantly reduced dynamic performance.', "", 134);
 
-                generateSlider("speedCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateSlider("speedCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 2000);
                 generateSlider("speedCont_", "6081", "0", "Target speed", "°/s", 'Sets the target speed', -20000, 20000);
                 break;
 
             case 'posCont_':
                 generateBoxTitle("posCont_", "Position control", "These are the Motor settings. These settings should not change since the electric motor of the servo drive is not replacable. Anyhow control values and the inertia could increase the drive performance.", "h1");
                 generateSwitch("posCont_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 133);
-                generateSlider("posCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateSlider("posCont_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 2000);
                 generateSlider("posCont_", "607a", "0", "Target Position", "deg", 'Sets thje target position', -1000, 1000);
                 generateSwitch("posCont_", 99, 1, "Use Path Planer", 'Enables the motor', 'pathPlanerDiv', 129);
                 generateSwitch("posCont_", 99, 2, "Use Stepper mode", 'Uses a microstepping algorithm to achieve smooth motion, for example, in telescopes. However, this motion exhibits significantly reduced dynamic performance.', "", 134);
@@ -1567,7 +1744,7 @@
             case 'sequencer_':
                 generateBoxTitle("sequencer_", "Sequencer", "Drive the motor in a sequence between two targets", "h1");
                 generateSwitch("sequencer_", 99, 0, "Enable", 'Enables the power stage of the drive', "", 133);
-                generateSlider("sequencer_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 600);
+                generateSlider("sequencer_", "6072", "0", "Torque limit", "mNm", 'Sets the torque maximum the motor is allowed to use', 10, 2000);
                 generateBoxContent("sequencer_", "82", "0", "Target Position A", -65536, 65536, "deg", 'Target position A for the sequence', "", "number", 90);
                 generateBoxContent("sequencer_", "82", "1", "Target Position B", -65536, 65536, "deg", 'Target position B for the sequence', "", "number", -90);
                 generateBoxContent("sequencer_", "82", "2", "Dwell Time", 100, 60000, "ms", 'Wait time at each position before moving to the next', "", "number", 1000);
@@ -1584,13 +1761,15 @@
                 break;
         }
 
+        updateFields();
+        applyTorqueSliderLimits();
         updateFieldsSwitch();
     }
 
     // Content for motor parameters
     generateBoxTitle("motorCont", "Motor Values", "These are the Motor settings. The most settings here should not change since the electric motor of the servo drive is not replacable.", "h1");
     generateBoxContent("motorCont", "driveName", "", "Drive Name", 1, 65536, '', 'This is the name of the Drive. The name is visible on the upper right side of the web GUI', "", "text");
-    generateBoxContent("motorCont", "6072", "0", "Maximum Current", 1, 65536, 'mA', 'This is the maximum current in A for the used Drive-system.');
+    generateBoxContent("motorCont", "6072", "0", "Maximum Torque", 10, 65535, 'mNm', 'Hardware maximum torque the drive may command (same object as the torque limit in control modes).');
     generateBoxContent("motorCont", "6631", "0", "Motor Coil Resistance", 1, 65536, 'umOhmH', 'The DC-Coil resistance of one phase of the used motor');
     generateBoxContent("motorCont", "6632", "0", "Motor Coil Inductance", 1, 65536, 'uH', 'The coil inductance of one motor phase measured at 1kHz');
     generateBoxContent("motorCont", "6630", "0", "Motor Torque Constant", 1, 65536, 'mNm/A', 'The torque constant is a measure of the relationship between the current flowing through a motor and the amount of torque it produces.');
@@ -1631,7 +1810,7 @@
         "<div id='netAdapterGrid' class='net-adapter-grid'></div>" +
         "</div>" +
         "<div class='section-card'>" +
-        "<div class='section-card-title' style='display:flex;align-items:center;justify-content:space-between'>Bus Discovery <a class='btn btn--outline' onclick='netScanBus()' style='font-size:10px;padding:2px 10px;line-height:1.4'>Scan Bus</a></div>" +
+        "<div class='section-card-title' style='display:flex;align-items:center;justify-content:space-between'>Bus Discovery <a class='btn btn--scan-bus' onclick='netScanBus()' style='font-size:11px;padding:5px 14px;line-height:1.35'>Scan Bus</a></div>" +
         "<div id='netDiscoveryStatus' style='padding:8px 14px;font-size:12px;color:var(--text-dim)'>Press <b>Scan Bus</b> to detect all EtherCAT slaves on the selected adapter. Disconnect first if connected.</div>" +
         "<div id='netDiscoveryResult'></div>" +
         "</div>" +
@@ -1655,7 +1834,7 @@
     byId("tuning_stepResponse_").innerHTML += "<div class='section-card' id='sr_test_config'><div class='section-card-title'>Test Configuration</div></div>";
     generateBoxContent("sr_test_config", 80, 0, "Step Size", 1, 3600, "deg", "The position step amplitude applied to the drive", "", "number", 180);
     generateBoxContent("sr_test_config", 80, 1, "Recording Time", 100, 30000, "ms", "Duration of the recording window after the step is applied", "", "number", 300);
-    generateBoxContent("sr_test_config", 80, 2, "Torque Limit", 1, 600, "mNm", "Maximum torque the drive may use during the step", "", "number", 300);
+    generateBoxContent("sr_test_config", 80, 2, "Torque Limit", 1, 2000, "mNm", "Maximum torque the drive may use during the step", "", "number", 300);
 
     byId("tuning_stepResponse_").innerHTML += "<div class='section-card' id='sr_tuning'><div class='section-card-title'>Control Tuning</div></div>";
     generateBoxContent("sr_tuning", 80, 3, "Current Bandwidth", 0, 2000, "Hz", "Control bandwidth of the current controller", "", "number", 800);
@@ -1712,9 +1891,9 @@
     generateBoxTitle("tuning_inertiaId_", "Inertia Identification", "Apply a known torque step and measure angular acceleration to compute total rotational inertia (rotor + load). The result can be written back to the motor settings.", "h1");
 
     byId("tuning_inertiaId_").innerHTML += "<div class='section-card' id='ii_test_config'><div class='section-card-title'>Test Configuration</div></div>";
-    generateBoxContent("ii_test_config", 82, 0, "Test Torque", 10, 600, "mNm", "Constant torque applied during the acceleration burst", "", "number", 200);
+    generateBoxContent("ii_test_config", 82, 0, "Test Torque", 10, 2000, "mNm", "Constant torque applied during the acceleration burst", "", "number", 200);
     generateBoxContent("ii_test_config", 82, 1, "Recording Time", 100, 5000, "ms", "Duration of the torque step recording window", "", "number", 500);
-    generateBoxContent("ii_test_config", 82, 2, "Torque Limit", 10, 600, "mNm", "Maximum torque the drive may use", "", "number", 600);
+    generateBoxContent("ii_test_config", 82, 2, "Torque Limit", 10, 2000, "mNm", "Maximum torque the drive may use", "", "number", 600);
 
     byId("tuning_inertiaId_").innerHTML +=
         "<div class='section-card'>" +
@@ -1800,7 +1979,7 @@
         '<div class="live-row"><h2>Device</h2><h3><div id="m1008s0">\u2014</div></h3><h4></h4></div>';
     generateLiveContent("driveSystemLive", "1009", "0", "HW Rev.", "");
     generateLiveContent("driveSystemLive", "100a", "0", "Firmware", "");
-    generateLiveContent("driveSystemLive", "603f", "0", "Last error", "");
+    generateLiveContent("driveSystemLive", "603f", "0", "Error code (0x603F)", "");
     generateLiveContent("driveSystemLive", "6061", "0", "Motor mode", "");
     generateLiveContent("driveSystemLive", "6041", "0", "Motor status", "");
     generateLiveContent("driveSystemLive", "2030", "1", "Temperature", "°C");
@@ -1955,12 +2134,12 @@
     function checkDiff(chamngeList) {
         let changeListReport = "<h2>The following objects have been changed:</h2><ul class='modalUL'>";
         for (let ii = 0; ii < chamngeList.length; ++ii) {
-            [index, subindex, value] = chamngeList[ii];
-            let stored = getObjValue(index, subindex);
-            if (stored !== undefined && stored != value) {
-                let el = ROM_byId("m" + index + "s" + subindex);
+            const [idx, sub, val] = chamngeList[ii];
+            let stored = getObjValue(idx, sub);
+            if (stored !== undefined && Number(stored) !== Number(val)) {
+                let el = ROM_byId("m" + idx + "s" + sub);
                 let elName = el ? el.name : "";
-                changeListReport += "<li>" + elName + " (0x" + index + ":0x" + subindex + ") old:" + stored + " new:" + value + " <a style='color: blue;' href=# onClick=\"cancleDiffChange('" + index + "','" + subindex + "');\" >revert</a></li>";
+                changeListReport += "<li>" + elName + " (0x" + idx + ":0x" + sub + ") old:" + stored + " new:" + val + " <a style='color: blue;' href=# onClick=\"cancleDiffChange('" + idx + "','" + sub + "');\" >revert</a></li>";
             }
         }
 
@@ -1997,13 +2176,20 @@
     }
 
     async function saveToEEPROM_hot(hot) {
-        ROM_writeOBJList(chamngeList);
-
-        if (hot === 1) {
-            ROM_sendXHRRequest("POST", host + "writeTicket", new Blob(["<system mode=\"4\" b=\"0\" c=\"0\" d=\"0\" />"], { type: "text/plain" }));
+        try {
+            await ROM_writeOBJList(chamngeList);
+            // Drive expects parameter recalculation after SDO changes, before save-to-EEPROM.
+            if (chamngeList.length > 0) {
+                await ROM_writeOBJ("6637", "0", 1);
+            }
+            if (hot === 1) {
+                await ROM_sendXHRRequest("POST", host + "writeTicket", new Blob(["<system mode=\"4\" b=\"0\" c=\"0\" d=\"0\" />"], { type: "text/plain" }));
+            }
+        } catch (e) {
+            console.error("saveToEEPROM_hot:", e);
+        } finally {
+            ROM_byId("modalInfoWindow").close();
         }
-
-        ROM_byId("modalInfoWindow").close();
     }
 
     let chamngeList = [];
@@ -2020,7 +2206,7 @@
             const textFieldValue = parseInt(el.value);
             if (isNaN(textFieldValue)) continue;
             let stored = getObjValue(index, subindex);
-            if (stored !== undefined && stored != textFieldValue)
+            if (stored !== undefined && Number(stored) !== textFieldValue)
                 chamngeList.push([index, subindex, textFieldValue]);
         }
 
@@ -2032,7 +2218,7 @@
             if (!el) continue;
             const textFieldValue = el.checked;
             let stored = getObjValue(index, subindex);
-            if (stored !== undefined && stored != Number(textFieldValue))
+            if (stored !== undefined && Number(stored) !== Number(textFieldValue))
                 chamngeList.push([index, subindex, Number(textFieldValue)]);
         }
 
@@ -2042,7 +2228,14 @@
     async function sliderInput(obj) {
         const match = obj.id.match(/^m(.+)s(.+?)(_I)?$/);
         if (!match) return;
-        await ROM_writeOBJ(match[1], match[2], obj.value)
+        await ROM_writeOBJ(match[1], match[2], obj.value);
+        if (
+            (match[1] === "6073" && match[2] === "0") ||
+            (match[1] === "6630" && match[2] === "0")
+        ) {
+            objectsFromDrive.set(match[1] + "," + match[2], Number(obj.value));
+            applyTorqueSliderLimits();
+        }
     }
 
     function submitSliderText(inputEl) {
@@ -2058,6 +2251,7 @@
         // Read whole object list from drive. After that update the fields
         ROM_readOBJList(function callback() {
             updateFields();
+            applyTorqueSliderLimits();
             updateFieldsSwitch();
             updateDriveName();
             updateLiveFromObjects();
@@ -2183,6 +2377,7 @@
         await ROM_readOBJList(function callback() {
             updateAllFields();
             updateAllFieldsSwitch();
+            applyTorqueSliderLimits();
         });
     }
 

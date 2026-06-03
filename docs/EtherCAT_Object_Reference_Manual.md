@@ -171,8 +171,14 @@ The HDrive17-ETC is an EtherCAT stepper motor controller implementing the CiA 40
 #### 0x6072 - Max Torque
 - **Type**: UINT16
 - **Access**: Read/Write
-- **Description**: Maximum torque
-- **Unit**: 0.1% of rated torque
+- **Description**: Maximum torque (motor / application limit)
+- **Unit**: CiA 402 often uses 0.1% of rated torque; HDrive web GUI uses **mNm** for this object.
+
+#### 0x6073 - Max Current
+- **Type**: UINT16 (device-specific)
+- **Access**: Read/Write
+- **Description**: Maximum motor / drive current limit (CiA 402)
+- **Unit**: Device-specific (e.g. mA or 0.1% rated current)
 
 #### 0x6079 - DC Link Circuit Voltage
 - **Type**: UINT16

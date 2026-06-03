@@ -138,14 +138,67 @@ function getObjValue(index, subindex) {
     return objectsFromDrive.has(key) ? objectsFromDrive.get(key) : undefined;
 }
 
+/** Torque sliders still read/write 0x6072 / 0x6071; range max comes from 0x6073 (mA)×0x6630 (mNm/A). */
+function applyTorqueSliderLimits() {
+    const imRaw = getObjValue("6073", "0");
+    const ktRaw = getObjValue("6630", "0");
+    const im = imRaw !== undefined && imRaw !== null && !isNaN(Number(imRaw)) ? Number(imRaw) : NaN;
+    const kt = ktRaw !== undefined && ktRaw !== null && !isNaN(Number(ktRaw)) ? Number(ktRaw) : NaN;
+    let cap =
+        im > 0 && kt > 0 && !isNaN(im) && !isNaN(kt)
+            ? Math.max(10, Math.round((im * kt) / 1000))
+            : null;
+    if (cap == null) {
+        cap =
+            typeof window._driveMaxTorqueMnm === "number" &&
+            window._driveMaxTorqueMnm >= 10
+                ? window._driveMaxTorqueMnm
+                : 2000;
+    } else {
+        window._driveMaxTorqueMnm = cap;
+    }
+
+    function syncPair(sliderId, inputId, min, max, indexHex, subHex) {
+        const ranges = document.querySelectorAll(
+            "input.slider[type='range']#" + sliderId
+        );
+        ranges.forEach(function (sl) {
+            sl.min = min;
+            sl.max = max;
+            let v = parseFloat(sl.value);
+            if (isNaN(v)) return;
+            let clamped = v;
+            if (v > max) clamped = max;
+            else if (v < min) clamped = min;
+            if (clamped !== v) {
+                sl.value = clamped;
+                const ti = document.getElementById(inputId);
+                if (ti) ti.value = clamped;
+                ROM_writeOBJ(indexHex, subHex, Math.round(clamped));
+            }
+        });
+        if (inputId) {
+            document.querySelectorAll("#" + inputId).forEach(function (ti) {
+                if (ti.type === "number") {
+                    ti.min = min;
+                    ti.max = max;
+                }
+            });
+        }
+    }
+
+    syncPair("m6072s0", "m6072s0_I", 10, cap, "6072", "0");
+    syncPair("m6071s0", "m6071s0_I", -cap, cap, "6071", "0");
+}
+
 async function ROM_readOBJList(callBack) {
     const url = `${host}getData.cgi?objL`;
-
+    let text = null;
     try {
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to fetch data (${response.status})`);
 
-        const text = await response.text();
+        text = await response.text();
         // Format from server: "decimal_index,decimal_subindex,value;..."
         // Convert to hex string keys for lookup
         const entries = text.split(";");
@@ -160,11 +213,16 @@ async function ROM_readOBJList(callBack) {
                 objectsFromDrive.set(idx + "," + sub, val);
             }
         });
-
-        callBack();
-        return text;
     } catch (error) {
         console.error(error);
-        return null;
+    } finally {
+        if (typeof callBack === "function") {
+            try {
+                callBack();
+            } catch (e) {
+                console.error("ROM_readOBJList callback", e);
+            }
+        }
     }
+    return text;
 }

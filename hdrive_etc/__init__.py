@@ -33,6 +33,12 @@ Multi-motor usage (shared bus)::
 
 from .bus import EtherCATBus
 from .motor import HDriveETC, Mode, Error
+from .protocol import (
+    CIA402_CW_ENABLE_OPERATION,
+    CIA402_CW_FAULT_RESET,
+    CIA402_CW_SHUTDOWN,
+    CIA402_CW_SWITCH_ON,
+)
 from .exceptions import (
     HDriveError,
     ConnectionError,
@@ -43,6 +49,10 @@ from .exceptions import (
 
 __version__ = "0.2.0"
 __all__ = [
+    "CIA402_CW_ENABLE_OPERATION",
+    "CIA402_CW_FAULT_RESET",
+    "CIA402_CW_SHUTDOWN",
+    "CIA402_CW_SWITCH_ON",
     "EtherCATBus",
     "HDriveETC",
     "Mode",

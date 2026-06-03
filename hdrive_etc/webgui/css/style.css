@@ -280,7 +280,8 @@ li .arrow { display: none; }
 
 .home-badge--idle     { background: var(--border-soft); color: var(--text-faint); }
 .home-badge--active   { background: rgba(34,197,94,0.15); color: var(--success); box-shadow: 0 0 12px rgba(34,197,94,0.15); }
-.home-badge--error    { background: rgba(239,68,68,0.15); color: var(--danger); box-shadow: 0 0 12px rgba(239,68,68,0.15); }
+.home-badge--error    { background: rgba(239,68,68,0.15); color: var(--danger); box-shadow: 0 0 12px rgba(239,68,68,0.15); cursor: pointer; }
+.home-badge--error:hover { filter: brightness(1.08); }
 
 /* Layout Containers */
 .gauge-row {
@@ -361,6 +362,36 @@ li .arrow { display: none; }
 
 .gauge-card--small .gauge-value { font-size: 24px; }
 
+.gauge-error-click-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  width: 100%;
+  margin: -6px;
+  padding: 6px;
+  border-radius: var(--radius);
+  box-sizing: border-box;
+}
+
+.gauge-error-click-area--can-reset {
+  cursor: pointer;
+}
+
+.gauge-error-click-area--can-reset:hover {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.gauge-error-click-area--can-reset:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.gauge-error-click-area .gauge-error-display {
+  flex: 0 0 auto;
+}
+
 .gauge-error-display {
   flex: 1;
   display: flex;
@@ -387,6 +418,23 @@ li .arrow { display: none; }
 .clear-error-btn:hover {
   background: var(--danger);
   color: #fff;
+}
+
+.cia402-reset-fault-btn {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  border: 1px solid var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cia402-reset-fault-btn:hover {
+  background: rgba(239, 68, 68, 0.22);
 }
 
 .gauge-info { margin-top: auto; }
@@ -818,6 +866,22 @@ select:focus {
   color: var(--text);
   box-shadow: none;
 }
+
+/* High-visibility bus scan (EtherCAT discovery) */
+.btn--scan-bus {
+  background: linear-gradient(180deg, #facc15 0%, #eab308 100%);
+  color: #1a1404;
+  border: 1px solid rgba(250, 204, 21, 0.95);
+  font-weight: 700;
+  box-shadow: 0 2px 12px rgba(234, 179, 8, 0.45);
+}
+.btn--scan-bus:hover {
+  background: linear-gradient(180deg, #fde047 0%, #facc15 100%);
+  color: #0f0d06;
+  box-shadow: 0 4px 18px rgba(234, 179, 8, 0.55);
+  transform: translateY(-1px);
+}
+
 .btn.red { background: var(--danger); }
 .btn.red:hover { background: #dc2626; box-shadow: 0 4px 16px rgba(239,68,68,0.3); }
 

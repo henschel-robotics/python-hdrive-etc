@@ -2,7 +2,7 @@
 
 Control [Henschel Robotics](https://henschel-robotics.ch) **HDrive** servo motors over **EtherCAT** from Python. No PLC required.
 
-![HDrive Web GUI](docs/images/01-home-dashboard.png)
+![HDrive Web GUI](https://raw.githubusercontent.com/henschel-robotics/python-hdrive-etc/main/docs/images/01-home-dashboard.png)
 
 ## Web Interface
 
@@ -10,12 +10,12 @@ The SDK includes a full-featured **browser-based GUI** for motor control, monito
 
 ```bash
 pip install hdrive-etc
-hdrive-web
+sudo hdrive-web
 ```
 
 Then open **http://localhost:8081** in your browser.
 
-![HDrive Web GUI — Dashboard](docs/images/01-home-dashboard.png)
+![HDrive Web GUI — Dashboard](https://raw.githubusercontent.com/henschel-robotics/python-hdrive-etc/main/docs/images/01-home-dashboard.png)
 
 The web GUI provides:
 
@@ -29,13 +29,13 @@ The web GUI provides:
 
 | Control | Step Response | EtherCAT Config |
 |---|---|---|
-| ![Control](docs/images/02-control-torque.png) | ![Step Response](docs/images/05-tuning-step-response.png) | ![EtherCAT](docs/images/11-ethercat-config.png) |
+| ![Control](https://raw.githubusercontent.com/henschel-robotics/python-hdrive-etc/main/docs/images/02-control-torque.png) | ![Step Response](https://raw.githubusercontent.com/henschel-robotics/python-hdrive-etc/main/docs/images/05-tuning-step-response.png) | ![EtherCAT](https://raw.githubusercontent.com/henschel-robotics/python-hdrive-etc/main/docs/images/11-ethercat-config.png) |
 
 > **Full guide with all screenshots:** [`docs/web-interface.md`](docs/web-interface.md)
 
 ```
-hdrive-web --adapter "\Device\NPF_{...}" --slave 0 --port 8081
-hdrive-web --list-adapters
+sudo hdrive-web --adapter "\Device\NPF_{...}" --slave 0 --port 8081
+sudo hdrive-web --list-adapters
 ```
 
 > **Raspberry Pi / Linux:** The web GUI saves its configuration (adapter, slave, PDO mapping) to `ethercat_config.json`. When installed via pip, the default file is inside the package directory. Copy it to your working directory for easy editing:
@@ -83,8 +83,7 @@ pip install -e ".[dev]"
 Start the web interface and use it to select your adapter, scan the bus, configure PDO assignments, and save:
 
 ```bash
-hdrive-web          # Windows
-sudo hdrive-web     # Linux / Raspberry Pi
+sudo hdrive-web          # Linux / Raspberry Pi
 ```
 
 Open **http://localhost:8081**, go to the **EtherCAT Config** tab, click **Scan Bus**, then **Save PDO Config**. This writes `ethercat_config.json` with your adapter and PDO mapping.
@@ -199,9 +198,18 @@ print(f"Cycle time:   {stats['cycle_time_actual_ms']:.2f} ms")
 error_code = motor.get_error_code()
 print(motor.get_error_message(error_code))
 
-# Clear error
+# Clear manufacturer error register only (SDO 0x6637 = 100)
 motor.clear_error()
+
+# Recommended: SDO clear + CiA 402 fault reset on PDO (0x0080) then
+# shutdown 0x0006 → switch on 0x0007 → enable 0x000F, matching firmware
+# ``statemachine.h`` / ``Statemachine.cpp``.
+motor.reset_motor_error()
 ```
+
+CiA 402 controlword constants (same names as firmware) are exported as
+``CIA402_CW_FAULT_RESET``, ``CIA402_CW_SHUTDOWN``, ``CIA402_CW_SWITCH_ON``,
+``CIA402_CW_ENABLE_OPERATION``.
 
 ### Control Tuning
 

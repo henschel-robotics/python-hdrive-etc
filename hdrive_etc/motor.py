@@ -18,6 +18,10 @@ import pysoem
 from .bus import EtherCATBus
 from .exceptions import ConnectionError, CommunicationError
 from .protocol import (
+    CIA402_CW_ENABLE_OPERATION,
+    CIA402_CW_FAULT_RESET,
+    CIA402_CW_SHUTDOWN,
+    CIA402_CW_SWITCH_ON,
     configure_pdo_mapping,
     decode_rx_pdo,
     encode_tx_pdo,
@@ -178,6 +182,7 @@ class HDriveETC:
         self._target_mode = Mode.TORQUE
         self._target_debug_outputs = None
         self._manual_controlword = None
+        self._cia_recovery = None  # dict: CiA 402 fault-reset + enable sequence (PDO-driven)
 
         # PDO loop internal state
         self._control_word = 0x0006
@@ -219,13 +224,16 @@ class HDriveETC:
         if rx:
             state = cia402_state_from_status(rx["status"])
 
-            if self._manual_controlword is not None:
-                self._control_word = self._manual_controlword
-            else:
-                self._control_word = next_control_word(state)
+            with self._lock:
+                if self._cia_recovery is not None:
+                    self._control_word = self._advance_cia402_recovery_locked(state)
+                elif self._manual_controlword is not None:
+                    self._control_word = self._manual_controlword
+                else:
+                    self._control_word = next_control_word(state)
 
-            self._state.update(rx)
-            self._state["state_name"] = state
+                self._state.update(rx)
+                self._state["state_name"] = state
 
         target_position = self._target_position
         target_velocity = self._target_velocity
@@ -239,6 +247,79 @@ class HDriveETC:
         )
         slave.output = tx_raw
 
+    def _recovery_timeout_ticks(self):
+        """PDO-cycle counts scaled from wall time (``self.cycle_time``)."""
+        c = max(float(self.cycle_time), 1e-6)
+
+        def n_seconds(sec, floor_n):
+            return max(floor_n, int(sec / c))
+
+        return {
+            "min_after_condition": max(2, int(0.001 / c)),
+            "fault_reset_max": n_seconds(2.0, 100),
+            "phase_max": n_seconds(1.5, 300),
+        }
+
+    def _advance_cia402_recovery_locked(self, state):
+        """CiA 402 fault reset (0x0080) then shutdown / switch-on / enable (lock held).
+
+        Matches firmware ``Statemachine.cpp`` / ``statemachine.h`` mask checks for
+        fault reset and the standard enable chain after transition 15.
+        """
+        r = self._cia_recovery
+        if r is None:
+            return next_control_word(state)
+        to = r["timeouts"]
+        min_ac = to["min_after_condition"]
+        faultish = ("fault", "fault_reaction")
+
+        t = r["tick"] + 1
+        r["tick"] = t
+        phase = r["phase"]
+
+        if phase == "fault_reset":
+            if state not in faultish and t >= min_ac:
+                r["phase"] = "shutdown"
+                r["tick"] = 0
+                return CIA402_CW_SHUTDOWN
+            if t >= to["fault_reset_max"]:
+                r["phase"] = "shutdown"
+                r["tick"] = 0
+                return CIA402_CW_SHUTDOWN
+            return CIA402_CW_FAULT_RESET
+
+        if phase == "shutdown":
+            if state == "ready_to_switch_on" and t >= min_ac:
+                r["phase"] = "switch_on"
+                r["tick"] = 0
+                return CIA402_CW_SWITCH_ON
+            if t >= to["phase_max"]:
+                self._cia_recovery = None
+                return next_control_word(state)
+            return CIA402_CW_SHUTDOWN
+
+        if phase == "switch_on":
+            if state == "switched_on" and t >= min_ac:
+                r["phase"] = "enable_op"
+                r["tick"] = 0
+                return CIA402_CW_ENABLE_OPERATION
+            if t >= to["phase_max"]:
+                self._cia_recovery = None
+                return next_control_word(state)
+            return CIA402_CW_SWITCH_ON
+
+        if phase == "enable_op":
+            if state == "operation_enabled" and t >= min_ac:
+                self._cia_recovery = None
+                return CIA402_CW_ENABLE_OPERATION
+            if t >= to["phase_max"]:
+                self._cia_recovery = None
+                return next_control_word(state)
+            return CIA402_CW_ENABLE_OPERATION
+
+        self._cia_recovery = None
+        return next_control_word(state)
+
     def on_reconnect(self, master):
         """Called by the bus after a successful reconnect."""
         with self._lock:
@@ -247,6 +328,7 @@ class HDriveETC:
             self._target_velocity = 0
             self._target_torque = 0
             self._manual_controlword = 0x0006
+            self._cia_recovery = None
         print(f"[MOTOR {self.slave_index}] Reconnected — held in STOP")
 
     def safe_stop(self):
@@ -406,7 +488,8 @@ class HDriveETC:
     def set_controlword(self, controlword):
         """Manually override the CiA 402 controlword.
 
-        This bypasses the automatic state machine.  Call
+        This bypasses the automatic state machine and cancels any in-flight
+        CiA fault recovery from :meth:`reset_motor_error`.  Call
         :meth:`clear_controlword` to return to automatic control.
 
         Args:
@@ -414,14 +497,17 @@ class HDriveETC:
         """
         with self._lock:
             self._manual_controlword = int(controlword) & 0xFFFF
+            self._cia_recovery = None
 
     def clear_controlword(self):
         """Clear the manual controlword override.
 
-        The automatic CiA 402 state machine resumes.
+        The automatic CiA 402 state machine resumes.  Any in-progress
+        :meth:`reset_motor_error` CiA recovery sequence is cancelled.
         """
         with self._lock:
             self._manual_controlword = None
+            self._cia_recovery = None
 
     def get_controlword(self):
         """Return the current manual controlword, or ``None`` if automatic."""
@@ -625,6 +711,10 @@ class HDriveETC:
     def clear_error(self):
         """Clear the drive error by writing to 0x6637.
 
+        This performs the HDrive manufacturer error clear (value ``100``).
+        For a full recovery including CiA 402 fault handling, prefer
+        :meth:`reset_motor_error`.
+
         Returns:
             bool: ``True`` on success.
         """
@@ -638,6 +728,29 @@ class HDriveETC:
         except Exception as exc:
             print(f"Error clearing error code: {exc}")
             return False
+
+    def reset_motor_error(self):
+        """Clear drive faults and run CiA 402 fault-reset + enable on PDO.
+
+        Writes manufacturer error clear (``0x6637 = 100``), clears manual
+        controlword override, then for several PDO cycles drives the firmware
+        sequence from ``statemachine.h``: fault reset ``(cw & 0x0080) == 0x0080``,
+        then shutdown ``0x0006``, switch on ``0x0007``, enable operation
+        ``0x000F`` (CiA transitions 15 then standard enable path).
+
+        Returns:
+            bool: ``True`` if the SDO clear succeeded, ``False`` if not
+            connected or the write failed.
+        """
+        ok = self.clear_error()
+        with self._lock:
+            self._manual_controlword = None
+            self._cia_recovery = {
+                "phase": "fault_reset",
+                "tick": 0,
+                "timeouts": self._recovery_timeout_ticks(),
+            }
+        return ok
 
     # ------------------------------------------------------------------
     # Debug outputs

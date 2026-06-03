@@ -100,6 +100,40 @@ def _save_net_config(pdo_config_path: str | None, adapter: str | None,
 # ---------------------------------------------------------------------------
 
 
+def _telemetry_dbg16(status: dict) -> tuple[float, ...]:
+    """16-float legacy debug vector for the web GUI binary packet.
+
+    When PDO **0x1A05** is mapped, ``status["debug_values"]`` is unpacked from
+    the slave input and returned as-is.
+
+    If only **0x1A00** is present (common minimal ``ethercat_config.json``),
+    ``decode_rx_pdo`` does not emit ``debug_values``; we then synthesize the
+    slots that the GUI expects from the CiA snapshot (position, velocity,
+    torque, mode) so graphs and live fields are not all zeros while the
+    statusword still updates.
+    """
+    raw = status.get("debug_values")
+    if raw is not None:
+        try:
+            seq = tuple(float(x) for x in raw[:16])
+            if len(seq) == 16:
+                return seq
+        except (TypeError, ValueError):
+            pass
+
+    pos = float(status.get("position", 0.0))
+    vel = float(status.get("velocity", 0.0))
+    trq = float(status.get("torque", 0.0))
+    mode = float(status.get("mode_display", 0) or 0)
+    dbg = [0.0] * 16
+    dbg[0] = time.perf_counter() * 1e6  # μs — time axis for live graph
+    dbg[1] = pos
+    dbg[2] = vel
+    dbg[10] = trq * 10.0  # packet uses dbg[10] * 0.1 → actual torque
+    dbg[11] = mode
+    return tuple(dbg)
+
+
 class MotorBridge:
     """Thread-safe bridge between the web server and the HDriveETC motor."""
 
@@ -118,6 +152,8 @@ class MotorBridge:
         self._device_name = ""
         self._hw_version = ""
         self._fw_version = ""
+        self._error_code_603f_cache = 0
+        self._error_code_603f_cache_mono = 0.0
 
     def connect(self, adapter=None, slave_index=None, cycle_time_ms=None):
         if self._connected:
@@ -139,14 +175,29 @@ class MotorBridge:
         self.motor.set_debug_outputs([2, 0, 0, 0, 0, 0, 0, 0])
         self.motor.stop()
         self.motor.set_controlword(0x0006)
-        max_trq = self.motor.read_sdo(0x6072, 0x00)
-        self._max_torque = max_trq if max_trq else 1000
+        self._recompute_max_torque_mnm()
         self._read_device_identity()
         _save_net_config(self._pdo_config_path, self._adapter,
                         self._slave_index, self._cycle_time_ms)
         print(f"[MotorBridge] Connected — {self._device_name} "
               f"hw={self._hw_version} fw={self._fw_version} "
               f"max_torque={self._max_torque}")
+
+    def _recompute_max_torque_mnm(self) -> None:
+        """UI torque ceiling (mNm): Imax from 0x6073 (mA) × Kt from 0x6630 (mNm/A)."""
+        if not self._connected or not self.motor:
+            return
+        try:
+            imax = self.motor.read_sdo(0x6073, 0x00)
+            kt = self.motor.read_sdo(0x6630, 0x00)
+            imax_i = int(imax) if imax is not None else 0
+            kt_i = int(kt) if kt is not None else 0
+            if imax_i > 0 and kt_i > 0:
+                self._max_torque = max(10, (imax_i * kt_i) // 1000)
+            else:
+                self._max_torque = 1000
+        except Exception:
+            self._max_torque = 1000
 
     def _read_device_identity(self):
         slave = self.motor.master.slaves[self.motor.slave_index]
@@ -185,19 +236,45 @@ class MotorBridge:
     def connected(self):
         return self._connected
 
+    def invalidate_error_code_603f_cache(self) -> None:
+        """Next telemetry sample will re-read 0x603F (e.g. after fault reset)."""
+        self._error_code_603f_cache_mono = 0.0
+
+    def _get_error_code_603f_cached(self) -> int:
+        """Read CiA 402 ErrorCode (0x603F:00) via SDO, rate-limited to avoid bus load."""
+        if not self._connected or not self.motor:
+            return 0
+        now = time.monotonic()
+        if now - self._error_code_603f_cache_mono < 0.05:
+            return self._error_code_603f_cache
+        self._error_code_603f_cache_mono = now
+        try:
+            v = self.motor.get_error_code()
+            self._error_code_603f_cache = int(v) & 0xFFFF if v is not None else 0
+        except Exception:
+            pass
+        return self._error_code_603f_cache
+
     # --- Binary telemetry ---
 
     def get_binary_telemetry(self) -> bytes:
-        """Build a 20-float (80-byte) REAL32 telemetry packet."""
+        """Build a 20-float (80-byte) REAL32 telemetry packet.
+
+        Float index **7** is CiA 402 **ErrorCode** object ``0x603F:00`` (UINT16
+        read via SDO, cached ~20 Hz).  Other indices follow the legacy debug
+        layout used by the web GUI.
+        """
         status = self.motor.get_status()
         statusword = float(status.get("status", 0))
-        dbg = status.get("debug_values") or (0.0,) * 16
+        dbg = _telemetry_dbg16(status)
+        err603f = float(self._get_error_code_603f_cached())
 
         values = [
             dbg[0], dbg[1], dbg[2], dbg[3], dbg[4],
             dbg[6],
             dbg[10] * 0.1,
-            dbg[9], dbg[14], dbg[11], dbg[12],
+            err603f,
+            dbg[14], dbg[11], dbg[12],
             dbg[8], dbg[7], dbg[15], dbg[5],
             statusword,
             0.0, 0.0, 0.0, 0.0,
@@ -240,6 +317,9 @@ class MotorBridge:
         self.motor.write_sdo(sdo_index, sdo_subindex, int(value))
         if sdo_index == 0x6072:
             self.motor.trigger_parameter_calculation()
+        elif sdo_index in (0x6073, 0x6630):
+            self.motor.trigger_parameter_calculation()
+            self._recompute_max_torque_mnm()
 
     def _handle_mode_switch(self, sub_key, value):
         value = int(value)
@@ -284,7 +364,7 @@ class MotorBridge:
             (0x6041, 0x00), (0x6061, 0x00), (0x6064, 0x00), (0x606C, 0x00),
             (0x6077, 0x00), (0x603F, 0x00), (0x6079, 0x00),
             (0x6062, 0x00), (0x606B, 0x00), (0x6071, 0x00),
-            (0x607F, 0x00), (0x6072, 0x00), (0x6083, 0x00), (0x6084, 0x00),
+            (0x607F, 0x00), (0x6072, 0x00), (0x6073, 0x00), (0x6083, 0x00), (0x6084, 0x00),
             (0x6691, 0x00), (0x6692, 0x00),
             (0x6630, 0x00), (0x6631, 0x00), (0x6632, 0x00),
             (0x6633, 0x00), (0x6634, 0x00), (0x6635, 0x00),
@@ -465,7 +545,7 @@ def run_inertia_test(motor, params: dict) -> dict:
 
     torque_mNm = int(params.get("torque_mNm", 200))
     duration_ms = float(params.get("duration_ms", 500))
-    torque_limit = int(params.get("torque_limit", 600))
+    torque_limit = int(params.get("torque_limit", 2000))
 
     _test_abort.clear()
     with _test_lock:
@@ -612,7 +692,11 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                     )
                     target = next((s for s in found if s["index"] == slave), None)
                     if target and "hdrive" not in (target.get("device_name") or target.get("name") or "").lower():
-                        self._send_json({"error": f"Slave {slave} ({target.get('device_name') or target.get('name')}) is not an HDrive motor. Only HDrive devices are supported."})
+                        self._send_json(
+                            {
+                                "error": "Please scan the bus and click on an HDrive.",
+                            }
+                        )
                         return
                 except Exception:
                     pass
@@ -624,6 +708,7 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                     "device": motor_bridge._device_name,
                     "hw": motor_bridge._hw_version,
                     "fw": motor_bridge._fw_version,
+                    "max_torque_mnm": motor_bridge._max_torque,
                 })
             except Exception as exc:
                 self._send_json({"error": str(exc)})
@@ -643,6 +728,7 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                 "device": motor_bridge._device_name if motor_bridge.connected else "",
                 "hw": motor_bridge._hw_version if motor_bridge.connected else "",
                 "fw": motor_bridge._fw_version if motor_bridge.connected else "",
+                "max_torque_mnm": motor_bridge._max_torque if motor_bridge.connected else None,
             })
             return
 
@@ -813,13 +899,22 @@ class HDriveRequestHandler(SimpleHTTPRequestHandler):
                 p.write_text(
                     json.dumps(existing, indent=2) + "\n", encoding="utf-8"
                 )
-                self._send_json({"ok": True})
+                self._send_json({"ok": True, "path": str(p.resolve())})
             except Exception as exc:
                 self._send_json({"error": str(exc)})
             return
 
         if not motor_bridge.connected:
             self._send_json({"error": "Not connected. Use Network Config to connect first."})
+            return
+
+        if path == "/api/reset-fault":
+            try:
+                ok = motor_bridge.motor.reset_motor_error()
+                motor_bridge.invalidate_error_code_603f_cache()
+                self._send_json({"ok": True, "sdo_clear": ok})
+            except Exception as exc:
+                self._send_json({"error": str(exc)})
             return
 
         if path == "/writeTicket":
@@ -923,6 +1018,12 @@ def main():
     parser.add_argument("--list-adapters", action="store_true",
                         help="List available network adapters and exit")
     args = parser.parse_args()
+
+    if os.name != "nt" and os.geteuid() != 0:
+        print("\n  Error: EtherCAT requires raw socket access.")
+        print("  Please run with sudo:\n")
+        print("    sudo hdrive-web\n")
+        raise SystemExit(1)
 
     if args.list_adapters:
         print("Available network adapters:")
